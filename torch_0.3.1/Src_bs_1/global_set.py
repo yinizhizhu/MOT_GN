@@ -8,7 +8,7 @@ criterion_s = 0  # 1 - MSELoss, 0 - CrossEntropyLoss
 
 u_s, e_s = 1, 1  # u_s - Uphi, e_s - Ephi
 
-train_test = 300  # n for training, n for testing
+train_test = 30  # n for training, n for testing
 u_evaluation = 0  # 1 - initiate randomly, 0 - initiate with the u learned
 # edge_init|                       random                       |
 #  u_init  |        random           |            learned

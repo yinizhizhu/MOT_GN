@@ -45,8 +45,7 @@ class GN():
 
         print '     Loading Data...'
         start = time.time()
-        train_set = DatasetFromFolder('MOT16/train/MOT16-05', self.outName)
-        self.data_loader = DataLoader(dataset=train_set, num_workers=4, batch_size=4, shuffle=True)
+        self.train_set = DatasetFromFolder('MOT16/train/MOT16-05', self.outName)
         t_data = time.time() - start
 
         # print self.tail
@@ -110,23 +109,25 @@ class GN():
         # self.showE()
         edge_counter = 0.0
         while self.frame_head < self.tail:
-            self.data_loader.dataset.loadNext()  # Get the next frame
+            self.train_set.loadNext()  # Get the next frame
             start = time.time()
             show_name = 'LOSS_{}'.format(step)
             print '         Step -', step
+            data_loader = DataLoader(dataset=self.train_set, num_workers=4, batch_size=4, shuffle=True)
             for epoch in xrange(1, self.nEpochs):
                 num = 0
                 epoch_loss = 0.0
                 arpha_loss = 0.0
-                for iteration in enumerate(self.data_loader, 1):
+                for iteration in enumerate(data_loader, 1):
+                    print iteration
                     e, gt, vs_index, vr_index = iteration
 
                     self.optimizer.zero_grad()
 
-                    u_ = self.Uphi(self.data_loader.dataset.E, self.data_loader.dataset.V,
+                    u_ = self.Uphi(self.train_set.E, self.train_set.V,
                                    Variable(self.u, requires_grad=True).cuda())
-                    v1 = self.data_loader.dataset.getApp(1)
-                    v2 = self.data_loader.dataset.getApp(0)
+                    v1 = self.train_set.getApp(1)
+                    v2 = self.train_set.getApp(0)
                     e_ = self.Ephi(e, v1, v2, u_)
 
                     if self.show_process:
@@ -177,7 +178,7 @@ class GN():
 
             print '         Time consuming:{}\n\n'.format(time.time()-start)
             self.updateUE()
-            self.data_loader.dataset.showE()
+            self.train_set.showE()
             self.showU()
             self.frame_head += self.tau
             average_epoch += epoch
@@ -188,59 +189,59 @@ class GN():
         print 'Random' if edge_initial else 'IoU'
 
     def updateUE(self):
-        u_ = self.Uphi(self.data_loader.dataset.E, self.data_loader.dataset.V,
+        u_ = self.Uphi(self.train_set.E, self.train_set.V,
                        Variable(self.u, volatile=True).cuda())
 
         self.u = u_.cpu().data if self.cuda else u_.data
 
         # update the edges
-        for edge in self.data_loader.dataset:
+        for edge in self.train_set:
             e, gt, vs_index, vr_index = edge
-            v1 = self.data_loader.dataset.vs[vs_index]
-            v2 = self.data_loader.dataset.vs[vr_index]
+            v1 = self.train_set.vs[vs_index]
+            v2 = self.train_set.vs[vr_index]
             e_ = self.Ephi(e, v1, v2, u_)
-            self.data_loader.dataset.edges[vs_index][vr_index] = e_.cpu().data if self.cuda else e_.data
+            self.train_set.edges[vs_index][vr_index] = e_.cpu().data if self.cuda else e_.data
 
     def update(self):
         start = time.time()
-        self.evaluation()
-        # self.updateNetwork()
+        # self.evaluation()
+        self.updateNetwork()
         self.evaluation()
         print 'The final time consuming:{}\n\n'.format(time.time()-start)
 
     def evaluation(self):
-        self.data_loader.dataset.setBuffer(self.tail)
+        self.train_set.setBuffer(self.tail)
         total_gt = 0.0
         total_ed = 0.0
         self.frame_head = self.tail
         while self.frame_head < 2*train_test:
-            self.data_loader.dataset.loadNext()
+            self.train_set.loadNext()
             print self.frame_head, 'F',
             self.frame_end = self.frame_head + self.tau
 
-            u_ = self.Uphi(self.data_loader.dataset.E, self.data_loader.dataset.V,
+            u_ = self.Uphi(self.train_set.E, self.train_set.V,
                            Variable(self.u, volatile=True).cuda())
 
             print 'Fo'
-            m = self.data_loader.dataset.m
-            n = self.data_loader.dataset.n
+            m = self.train_set.m
+            n = self.train_set.n
             ret = [[0.0 for i in xrange(n)] for j in xrange(m)]
-            step_gt = self.data_loader.dataset.step_gt
+            step_gt = self.train_set.step_gt
             total_gt += step_gt
 
             # update the edges
             print 'T',
-            for edge in self.data_loader.dataset.candidates:
+            for edge in self.train_set.candidates:
                 e, gt, vs_index, vr_index = edge
-                v1 = self.data_loader.dataset.vs[vs_index]
-                v2 = self.data_loader.dataset.vs[vr_index]
+                v1 = self.train_set.vs[vs_index]
+                v2 = self.train_set.vs[vr_index]
                 e_ = self.Ephi(e, v1, v2, u_)
-                self.data_loader.dataset.edges[vs_index][vr_index-m] = e_.cpu().data if self.cuda else e_.data
+                self.train_set.edges[vs_index][vr_index-m] = e_.cpu().data if self.cuda else e_.data
                 tmp = F.softmax(e_)
                 tmp = tmp.cpu().data.numpy()[0]
                 ret[vs_index][vr_index-m] = float(tmp[0])
 
-            self.data_loader.dataset.showE()
+            self.train_set.showE()
             self.showU()
 
             for j in ret:
@@ -249,7 +250,7 @@ class GN():
             print self.frame_head, results,
             step_ed = 0.0
             for (j, k) in results:
-                step_ed += self.data_loader.dataset.gts[j][k].numpy()[0]
+                step_ed += self.train_set.gts[j][k].numpy()[0]
             total_ed += step_ed
 
             print 'Fi'

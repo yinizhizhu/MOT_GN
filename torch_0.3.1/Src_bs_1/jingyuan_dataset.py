@@ -134,8 +134,8 @@ class readBB():
         self.reset()
         basis = self.trainDir if tag == 0 else self.testDir
         # trainList = os.listdir(basis)
-        # trainList = ['in_place', 'right_left']
-        trainList = ['in_place']
+        # trainList = ['in_place', 'right_left', 'left_right']
+        trainList = ['left_right']
         for part in trainList:
             part = basis+part
             self.dirAll.append(part)
@@ -181,6 +181,8 @@ class readBB():
                 for line in f.readlines():
                     line = line.strip().split(',')
                     index = int(line[0])
+                    if index > seqL:
+                        continue
                     id = int(line[1])
                     x, y = int(float(line[2])), int(float(line[3]))
                     w, h = int(float(line[4])), int(float(line[5]))
@@ -237,8 +239,8 @@ class readBB():
         self.reset()
         basis = self.trainDir if tag == 0 else self.testDir
         # trainList = os.listdir(basis)
-        # trainList = ['in_place', 'right_left']
-        trainList = ['in_place']
+        # trainList = ['in_place', 'right_left', 'left_right']
+        trainList = ['left_right']
         for part in trainList:
             part = basis+part
             self.dirAll.append(part)
@@ -427,6 +429,7 @@ class readBB():
                     tmp = edges[i][j].numpy()[0]
                     ans[i][j] = float(tmp)
         if tag:
+            # print ret, con1, con2
             ret = torch.FloatTensor(ret)
             con1 = torch.FloatTensor(con1)
             con2 = torch.FloatTensor(con2)

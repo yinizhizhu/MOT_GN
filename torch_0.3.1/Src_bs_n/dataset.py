@@ -25,7 +25,7 @@ class appearance(nn.Module):
 
 
 class DatasetFromFolder(data.Dataset):
-    def __init__(self, part, outName, cuda=True, show=0):
+    def __init__(self, part, outName, cuda=False, show=0):
         super(DatasetFromFolder, self).__init__()
         self.dir = part
         self.img_dir = part + '/img1/'
@@ -125,8 +125,7 @@ class DatasetFromFolder(data.Dataset):
             crop = img.crop([x, y, x + w, y + h])
             bbx = crop.resize((224, 224), Image.ANTIALIAS)
             ret = self.resnet34(bbx)
-            app = ret.data
-            app = Variable(app)
+            app = Variable(ret.data)
             apps.append([app, id])
 
             if self.show:
@@ -213,7 +212,7 @@ class DatasetFromFolder(data.Dataset):
         self.feature()
         self.initEC()
         self.swapFC()
-        print self.f_step
+        print '     The index of the next frame', self.f_step
         # print self.detections[self.cur]
         # print self.detections[self.nxt]
 
@@ -273,7 +272,13 @@ class DatasetFromFolder(data.Dataset):
         return ret
 
     def __getitem__(self, index):
-        return self.candidates[index]
+        ans = self.candidates[index]
+        print len(ans)
+        print ans[0].cpu().data
+        print ans[1].cpu().data
+        print ans[2]
+        print ans[3]
+        return ans
 
     def __len__(self):
         return len(self.candidates)

@@ -4,8 +4,8 @@ from torch.autograd import Variable
 import torch.nn.functional as F
 import numpy as np
 from mot_model import *
-from mot_dataset import readBB
-# from jingyuan_dataset import readBB
+# from mot_dataset import readBB
+from jingyuan_dataset import readBB
 import time, random
 from munkres import Munkres
 from pycrayon import CrayonClient
@@ -38,6 +38,7 @@ class GN():
         self.tau = 3
         # self.frame_end = len(self.edges[0])-1
         self.lr = lr
+        self.modelDir = 'Model/'
         self.outName = 'result.txt'
 
         self.show_process = 0   # interaction
@@ -301,10 +302,20 @@ class GN():
             e_ = self.Ephi(e, v1, v2, u_)
             self.edges[s][f][j][k] = e_.cpu().data if self.cuda else e_.data
 
+    def saveModel(self):
+        print 'Saving the Uphi model...'
+        torch.save(self.Uphi, self.modelDir+'in_place_uphi.pth')
+        print 'Saving the Ephi model...'
+        torch.save(self.Ephi, self.modelDir+'in_place_ephi.pth')
+        print 'Saving the global variable u...'
+        torch.save(self.u, self.modelDir+'u.pth')
+        print 'Done!'
+
     def update(self):
         start = time.time()
         self.preEvaluate()
         self.updateNetwork()
+        self.saveModel()
         self.evaluation()
         print 'The final time consuming:{}\n\n'.format(time.time()-start)
 
