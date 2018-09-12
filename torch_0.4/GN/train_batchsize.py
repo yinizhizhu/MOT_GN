@@ -5,55 +5,65 @@ import numpy as np
 from mot_model import *
 from torch.utils.data import DataLoader
 from dataset import DatasetFromFolder
-import time, random
+import time, random, os, shutil
 from munkres import Munkres
-from pycrayon import CrayonClient
-from global_set import edge_initial, u_initial, train_test
+from global_set import edge_initial, u_initial
 
-curveName = list()
-curveName.append('regular_loss')
-curveName.append('penalized_loss')
-curveName.append('epoch_num')
+from tensorboardX import SummaryWriter
 
-cc = CrayonClient(hostname="localhost", port=8889)
-
-exper = list()
-for name in curveName:
-    cc.remove_experiment(name)
-    exper.append(cc.create_experiment(name))
+# from pycrayon import CrayonClient
+# curveName = list()
+# curveName.append('regular_loss')
+# curveName.append('penalized_loss')
+# curveName.append('epoch_num')
+#
+# cc = CrayonClient(hostname="localhost", port=8889)
+#
+# exper = list()
+# for name in curveName:
+#     cc.remove_experiment(name)
+    # exper.append(cc.create_experiment(name))
 
 torch.manual_seed(123)
 np.random.seed(123)
 
-learn_rate = [1e-3, 1e-4]
+t_dir = ''  # the dir of the final level
+sequence_dir = ''  # the dir of the training dataset
+
+
+def deleteDir(del_dir):
+    shutil.rmtree(del_dir)
 
 
 class GN():
-    def __init__(self, lr=5e-3, batchs=8, cuda=True):
+    def __init__(self, tt, tag, lr=5e-3, batchs=8, cuda=True):
+        '''
+        :param tt: train_test
+        :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
+        :param lr:
+        :param batchs:
+        :param cuda:
+        '''
         # all the tensor should set the 'volatile' as True, and False when update the network
+        self.writer = SummaryWriter()
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
         self.nEpochs = 999
-        self.tau = 3
-        # self.frame_end = len(self.edges[0])-1
         self.lr = lr
         self.batchsize = batchs
         self.numWorker = 4
-        self.outName = 'result.txt'
+        self.outName = t_dir+'result.txt'
 
         self.show_process = 0   # interaction
         self.step_input = 1
 
-        print '     Loading Data...'
+        # print '     Loading Data...'
         start = time.time()
-        self.train_set = DatasetFromFolder('MOT16/train/MOT16-05', self.outName)
+        self.train_set = DatasetFromFolder(sequence_dir, self.outName)
         t_data = time.time() - start
 
-        # print self.tail
-        self.tail = train_test
-        self.tau = 1
-        self.frame_head = 1
-        self.frame_end = self.frame_head + self.tau
+        self.train_test = tt
+        self.tag = tag
         self.loss_threhold = 0.03
 
         print '     Preparing the model...'
@@ -73,6 +83,32 @@ class GN():
         print '     Logging...'
         self.log(t_data)
 
+    def getEdges(self):
+        self.train_set.setBuffer(1)
+        step = 1
+        edge_counter = 0.0
+        for head in xrange(self.train_test):
+            self.train_set.loadNext()  # Get the next frame
+            edge_counter += self.train_set.m * self.train_set.n
+            step += 1
+            self.train_set.swapFC()
+        out = open(self.outName, 'a')
+        print >> out, 'Average edge:', edge_counter*1.0/step
+        out.close()
+
+    def showNetwork(self):
+        # add the graph into tensorboard
+        E = torch.rand(1, 2).to(self.device)
+        V = torch.rand(1, 512).to(self.device)
+        u = torch.rand(1, 100).to(self.device)
+        self.writer.add_graph(self.Uphi, (E, V, u))
+
+        E = torch.rand(1, 2).to(self.device)
+        V1 = torch.rand(1, 512).to(self.device)
+        V2 = torch.rand(1, 512).to(self.device)
+        u = torch.rand(1, 100).to(self.device)
+        self.writer.add_graph(self.Ephi, (E, V1, V2, u))
+
     def log(self, t_data):
         out = open(self.outName, 'w')
         print >> out, self.criterion
@@ -82,6 +118,7 @@ class GN():
         print >> out, self.Ephi
         print >> out, 'Time consuming for loading datasets:', t_data
         out.close()
+        # self.showNetwork()
 
     def resetU(self):
         if u_initial:
@@ -102,12 +139,10 @@ class GN():
         self.train_set.setBuffer(1)
         step = 1
         average_epoch = 0
-        self.frame_head = 1
-        # self.frame_end = self.frame_head+self.tau
-        # self.showE()
         edge_counter = 0.0
-        while self.frame_head < self.tail:
+        for head in xrange(self.train_test):
             self.train_set.loadNext()  # Get the next frame
+            edge_counter += self.train_set.m * self.train_set.n
             start = time.time()
             show_name = 'LOSS_{}'.format(step)
             print '         Step -', step
@@ -119,8 +154,8 @@ class GN():
                 for iteration in enumerate(data_loader, 1):
                     index, (e, gt, vs_index, vr_index) = iteration
                     # print '*'*36
-                    # print e.size(), e
-                    # print gt.size(), gt
+                    # print e.size()
+                    # print gt.size()
                     e = e.to(self.device)
                     gt = gt.to(self.device)
 
@@ -144,7 +179,6 @@ class GN():
                     # Penalize the u to let its value not too big
                     arpha = torch.mean(torch.abs(u_))
                     arpha_loss += arpha.item()
-                    self.helpLoss1 = arpha.item()
                     arpha.backward(retain_graph=True)
 
                     #  The regular loss
@@ -153,7 +187,6 @@ class GN():
                     loss = self.criterion(e_, gt.squeeze(1))
                     # print loss
                     epoch_loss += loss.item()
-                    self.helpLoss2 = loss.item()
                     loss.backward()
 
                     # update the network: Uphi and Ephi
@@ -175,6 +208,8 @@ class GN():
 
                 epoch_loss /= num
                 print '         Loss of epoch {}: {}.'.format(epoch, epoch_loss)
+                self.writer.add_scalars(show_name, {'regular': epoch_loss,
+                                               'u': arpha_loss/num*self.batchsize}, epoch)
                 # exper[0].add_scalar_value(show_name, epoch_loss, epoch)
                 # exper[1].add_scalar_value(show_name, arpha_loss, epoch)
                 if epoch_loss < self.loss_threhold:
@@ -184,14 +219,25 @@ class GN():
             self.updateUE()
             self.train_set.showE()
             self.showU()
-            self.frame_head += self.tau
             average_epoch += epoch
+            self.writer.add_scalar('epoch', epoch, step)
             # exper[2].add_scalar_value('epoch', epoch, step)
             step += 1
             self.train_set.swapFC()
-        print 'Average edge:', edge_counter*1.0/step, '.',
-        print 'Average epoch:', average_epoch*1.0/step, 'for',
-        print 'Random' if edge_initial else 'IoU'
+        out = open(self.outName, 'a')
+        print >> out, 'Average edge:', edge_counter*1.0/step, '.',
+        print >> out, 'Average epoch:', average_epoch*1.0/step, 'for',
+        print >> out, 'Random' if edge_initial else 'IoU'
+        out.close()
+
+    def saveModel(self):
+        print 'Saving the Uphi model...'
+        torch.save(self.Uphi, t_dir+'uphi.pth')
+        print 'Saving the Ephi model...'
+        torch.save(self.Ephi, t_dir+'ephi.pth')
+        print 'Saving the global variable u...'
+        torch.save(self.u, t_dir+'u.pth')
+        print 'Done!'
 
     def updateUE(self):
         u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
@@ -209,20 +255,30 @@ class GN():
 
     def update(self):
         start = time.time()
-        self.evaluation()
+        self.evaluation(1)
+        if self.tag:
+            self.evaluation(self.train_test)
         self.updateNetwork()
-        self.evaluation()
-        print 'The final time consuming:{}\n\n'.format(time.time()-start)
+        self.saveModel()
+        self.evaluation(1)
+        if self.tag:
+            self.evaluation(self.train_test)
+        out = open(self.outName, 'a')
+        print >> out, 'The final time consuming:{}\n\n'.format((time.time()-start)/60)
+        out.close()
+        self.outputScalars()
 
-    def evaluation(self):
-        self.train_set.setBuffer(self.tail)
+    def outputScalars(self):
+        self.writer.export_scalars_to_json(t_dir + 'scalars.json')
+        self.writer.close()
+
+    def evaluation(self, head):
+        self.train_set.setBuffer(head)
         total_gt = 0.0
         total_ed = 0.0
-        self.frame_head = self.tail
-        while self.frame_head < 2*train_test:
+        for step in xrange(self.train_test):
             self.train_set.loadNext()
-            print self.frame_head, 'F',
-            self.frame_end = self.frame_head + self.tau
+            print head+step, 'F',
 
             u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
 
@@ -252,7 +308,7 @@ class GN():
             for j in ret:
                 print j
             results = self.hungarian.compute(ret)
-            print self.frame_head, results,
+            print head+step, results,
             step_ed = 0.0
             for (j, k) in results:
                 step_ed += self.train_set.gts[j][k].numpy()[0]
@@ -260,11 +316,12 @@ class GN():
 
             print 'Fi'
             print 'Step ACC:{}/{}({}%)'.format(int(step_ed), int(step_gt), step_ed/step_gt*100)
-            self.frame_head += self.tau
             self.train_set.swapFC()
-        print 'Final ACC:{}/{}({}%)'.format(int(total_ed), int(total_gt), total_ed/total_gt*100)
+
+        tra_tst = 'training sets' if head == 1 else 'testing sets'
+        print 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
         out = open(self.outName, 'a')
-        print >> out, 'Final ACC:', total_ed/total_gt
+        print >> out, 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
         out.close()
 
     def showU(self):
@@ -275,15 +332,54 @@ class GN():
 
 
 if __name__ == '__main__':
-    start = time.time()
-    gn = GN()
     try:
-        print '     Starting Graph Network...'
-        gn.update()
+        year = 16
+        f_dir = 'Results/MOT%s/' % year
+        if not os.path.exists(f_dir):
+            os.mkdir(f_dir)
+
+        if edge_initial == 1:
+            f_dir += 'Random/'
+        elif edge_initial == 0:
+            f_dir += 'IoU/'
+
+        if not os.path.exists(f_dir):
+            os.mkdir(f_dir)
+
+        # seqs = [2, 4, 5, 9, 10, 11, 13]
+        # lengths = [600, 1050, 837, 525, 654, 900, 750]
+        seqs = [10, 11, 13]
+        lengths = [654, 900, 750]
+        for i in xrange(3):
+            seq_index = seqs[i]
+            tts = [tt for tt in xrange(100, 600, 100)]
+            length = lengths[i]
+            tts.append(length)
+            for tt in tts:
+                tag = 1
+                if tt*2 > length:
+                    if tt == length:
+                        tag = 0
+                    else:
+                        continue
+
+                s_dir = f_dir + '%02d/' % seq_index
+                if not os.path.exists(s_dir):
+                    os.mkdir(s_dir)
+
+                t_dir = s_dir + '%d/' % tt
+                if not os.path.exists(t_dir):
+                    os.mkdir(t_dir)
+
+                seq_dir = 'MOT%d-%02d' % (year, seq_index)
+                sequence_dir = 'MOT16/train/' + seq_dir
+                print sequence_dir
+
+                start = time.time()
+                gn = GN(tt-1, tag)
+                print '     Starting Graph Network...'
+                gn.update()
     except KeyboardInterrupt:
-        a = raw_input('Evaluating?')
-        if a == 'yes':
-            gn.evaluation()
         print 'Time consuming:', time.time()-start
         print ''
         print '-'*90
