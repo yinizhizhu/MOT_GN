@@ -1,12 +1,11 @@
 # from __future__ import print_function
 import numpy as np
 from mot_model import *
-import time, os, shutil
 from munkres import Munkres
 import torch.nn.functional as F
-from test_dataset import DatasetFromFolder
+import time, os, shutil, commands
 from global_set import edge_initial
-import commands
+from test_dataset import DatasetFromFolder
 
 torch.manual_seed(123)
 np.random.seed(123)
@@ -15,13 +14,22 @@ np.random.seed(123)
 def deleteDir(del_dir):
     shutil.rmtree(del_dir)
 
-
+tau = 0.1
+gap = 16
 year = 16
 t_dir = ''  # the dir of the final level
 metrics_dir = ''  # the dir of the motmetrics
 sequence_dir = ''  # the dir of the training dataset
-seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
-lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+# seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
+# lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+seqs = [5, 13]  # the set of sequences
+lengths = [837, 750]  # the length of the sequence
+
+
+def cleanText():
+    out = open('res_dir_list.txt', 'w')
+    out.close()
+cleanText()
 
 
 class GN():
@@ -31,7 +39,6 @@ class GN():
         :param seq_index: the number of the sequence
         :param tt: train_test
         :param length: the number of frames which is used for training
-        :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
         :param cuda: True - GPU, False - CPU
         '''
         self.seq_index = seq_index
@@ -52,12 +59,9 @@ class GN():
         self.initOut()
 
     def initOut(self):
-        motmetrics = open(metrics_dir, 'a')
-        print >> motmetrics, '*'*30, self.tt, '*'*30
-
         start = time.time()
         print '     Loading Data...'
-        print '     ', sequence_dir
+        print '     Training'
         self.train_set = DatasetFromFolder(sequence_dir)
 
         gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
@@ -69,13 +73,21 @@ class GN():
         self.createTxt(res_training)
         self.copyLines(self.seq_index, 1, detection_dir, self.tt, 1)
 
+        # Evaluating on the training data
+        motmetrics = open(metrics_dir, 'a')
+        print >> motmetrics, '*'*30, self.tt, '*'*30
         print >> motmetrics, 'Training'
         self.evaluation(1, self.tt, detection_dir, res_training)
         cmd = 'python3 evaluation.py %s %s'%(gt_training, res_training)
         (status, output) = commands.getstatusoutput(cmd)
         print >> motmetrics, output
+        print >> motmetrics, 'The time consuming:{}\n\n'.format((time.time()-start)/60)
+        motmetrics.close()
 
         if self.tt < self.length:
+            # Evaluating on the validation data
+            start = time.time()
+            print '     Validation'
             gt_valiadation = self.out_dir + 'gt_validation.txt'  # the gt of the validation data
             self.copyLines(self.seq_index, self.tt, gt_valiadation, self.length)
 
@@ -85,15 +97,21 @@ class GN():
             self.createTxt(res_validation)
             self.copyLines(self.seq_index, self.tt, detection_dir, self.length, 1)
 
+            motmetrics = open(metrics_dir, 'a')
             print >> motmetrics, 'Validation'
             self.evaluation(self.tt, self.length, detection_dir, res_validation)
             cmd = 'python3 evaluation.py %s %s'%(gt_valiadation, res_validation)
             (status, output) = commands.getstatusoutput(cmd)
             print >> motmetrics, output
+            print >> motmetrics, 'The time consuming:{}\n\n'.format((time.time()-start)/60)
+            motmetrics.close()
         else:
+            # Evaluating on the validation data
             for seq in seqs:
                 if seq == self.seq_index:
                     continue
+                print '     %02d_Validation'%seq
+                start = time.time()
                 seq_dir = 'MOT16/train/MOT%d-%02d' % (year, seq)
                 self.train_set = DatasetFromFolder(seq_dir)
                 gt_seq = self.out_dir + 'gt_%02d.txt' % seq
@@ -105,14 +123,14 @@ class GN():
                 self.createTxt(c_validation)
                 self.copyLines(seq, 1, detection_dir, tag=1)
 
+                motmetrics = open(metrics_dir, 'a')
                 print >> motmetrics, '%02d_validation'%seq
                 self.evaluation(1, seqL, detection_dir, c_validation)
                 cmd = 'python3 evaluation.py %s %s'%(gt_seq, c_validation)
                 (status, output) = commands.getstatusoutput(cmd)
                 print >> motmetrics, output
-
-        print >> motmetrics, 'The final time consuming:{}\n\n'.format((time.time()-start)/60)
-        motmetrics.close()
+                print >> motmetrics, 'The time consuming:{}\n\n'.format((time.time()-start)/60)
+                motmetrics.close()
 
     def getSeqL(self, info):
         # get the length of the sequence
@@ -130,7 +148,7 @@ class GN():
         Copy the groun truth within [head, head+num]
         :param seq: the number of the sequence
         :param head: the head frame number
-        :param num: the number the clipped sequence
+        :param tail: the number the clipped sequence
         :param gt_seq: the dir of the output file
         :return: None
         '''
@@ -182,9 +200,10 @@ class GN():
         id_con = [[], []]
         id_step = 1
 
-        self.train_set.setBuffer(head)
-        for step in xrange(head, tail):
-            self.train_set.loadNext()
+        step = head + self.train_set.setBuffer(head)
+        print step, head
+        while step < tail:
+            step += self.train_set.loadNext()
             # print head+step, 'F',
 
             u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
@@ -192,18 +211,20 @@ class GN():
             # print 'Fo'
             m = self.train_set.m
             n = self.train_set.n
+            if n==0:
+                print 'There is no detection in the rest of sequence!'
+                break
             ret = [[0.0 for i in xrange(n)] for j in xrange(m)]
 
             if id_step == 1:
-                line_con[self.cur] = []
-                id_con[self.cur] = []
                 out = open(outFile, 'a')
                 for i in xrange(m):
                     attrs = gtIn.readline().strip().split(',')
+                    attrs.append(1)
                     # print attrs
                     attrs[1] = str(id_step)
                     line = ''
-                    for attr in attrs:
+                    for attr in attrs[:-1]:
                         line += attr + ','
                     line = line[:-1]
                     print >> out, line
@@ -211,10 +232,9 @@ class GN():
                     id_con[self.cur].append(id_step)
                     id_step += 1
                 out.close()
-            line_con[self.nxt] = []
-            id_con[self.nxt] = []
             for i in xrange(n):
                 attrs = gtIn.readline().strip().split(',')
+                attrs.append(1)
                 line_con[self.nxt].append(attrs)
                 id_con[self.nxt].append(-1)
 
@@ -246,7 +266,7 @@ class GN():
                 # print attrs
                 attrs[1] = str(id)
                 line = ''
-                for attr in attrs:
+                for attr in attrs[:-1]:
                     line += attr + ','
                 line = line[:-1]
                 print >> out, line
@@ -257,13 +277,26 @@ class GN():
                     attrs = line_con[self.nxt][i]
                     attrs[1] = str(id_step)
                     line = ''
-                    for attr in attrs:
+                    for attr in attrs[:-1]:
                         line += attr + ','
                     line = line[:-1]
                     print >> out, line
                     id_step += 1
             out.close()
 
+            index = 0
+            for (i, j) in results:
+                while i != index:
+                    attrs = line_con[self.cur][index]
+                    if attrs[-1] >= gap:
+                        attrs[-1] += 1
+                        line_con[self.nxt].append(attrs)
+                        id_con[self.nxt].append(id_con[self.cur][index])
+                    index += 1
+                index += 1
+
+            line_con[self.cur] = []
+            id_con[self.cur] = []
             # print head+step, results
             self.train_set.swapFC()
             self.swapFC()
@@ -293,11 +326,11 @@ if __name__ == '__main__':
         if not os.path.exists(metric_dir):
             os.mkdir(metric_dir)
 
-        for i in xrange(7):
+        for i in xrange(1, 2):
             seq_index = seqs[i]
             tts = [tt for tt in xrange(100, 600, 100)]
             length = lengths[i]
-            tts.append(length)
+            # tts.append(length)
 
             metrics_dir = metric_dir+'%02d.txt'%seq_index
             motmetrics = open(metrics_dir, 'w')

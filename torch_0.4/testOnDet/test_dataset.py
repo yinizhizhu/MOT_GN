@@ -30,7 +30,7 @@ class DatasetFromFolder(data.Dataset):
         self.dir = part
         self.cleanPath(part)
         self.img_dir = part + '/img1/'
-        self.det_dir = part + '/det'
+        self.det_dir = part + '/det/'
         self.device = torch.device("cuda" if cuda else "cpu")
         self.show = show
 
@@ -65,7 +65,7 @@ class DatasetFromFolder(data.Dataset):
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
-        det = self.det_dir + '/det.txt'
+        det = self.det_dir + 'det.txt'
         f = open(det, 'r')
         for line in f.readlines():
             line = line.strip().split(',')
@@ -89,8 +89,16 @@ class DatasetFromFolder(data.Dataset):
         self.feature(1)
 
     def setBuffer(self, f):
-        self.f_step = f
-        self.feature(1)
+        self.m = 0
+        counter = -1
+        while self.m == 0:
+            counter += 1
+            self.f_step = f + counter
+            self.feature(1)
+            self.m = len(self.detections[self.cur])
+        if counter > 0:
+            print '           Empty in setBuffer:', counter
+        return counter
 
     def fixBB(self, x, y, w, h, size):
         width, height = size
@@ -143,7 +151,7 @@ class DatasetFromFolder(data.Dataset):
     def getMN(self, m, n):
         ans = [[None for i in xrange(n)] for i in xrange(m)]
         for i in xrange(m):
-            Reframe = self.bbx[self.f_step-1][i]
+            Reframe = self.bbx[self.f_step-self.gap][i]
             for j in xrange(n):
                 GTframe = self.bbx[self.f_step][j]
                 p = self.IOU(Reframe, GTframe)
@@ -198,7 +206,7 @@ class DatasetFromFolder(data.Dataset):
             bbx_container = []
             for bbx in self.bbx[self.f_step]:
                 """
-                Condition needed be taken into consideration:
+                Bellow Conditions needed be taken into consideration:
                     x, y < 0 and x+w > W, y+h > H
                 """
                 img = load_img(self.img_dir+'%06d.jpg'%self.f_step)  # initial with loading the first frame
@@ -228,9 +236,20 @@ class DatasetFromFolder(data.Dataset):
         else:
             self.detections[self.nxt] = apps
 
-    def initEC(self):
+    def loadNext(self):
         self.m = len(self.detections[self.cur])
-        self.n = len(self.detections[self.nxt])
+
+        self.gap = 0
+        self.n = 0
+        while self.n == 0:
+            self.f_step += 1
+            self.feature()
+            self.n = len(self.detections[self.nxt])
+            self.gap += 1
+
+        if self.gap > 1:
+            print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1
+
         self.candidates = []
         self.edges = self.getMN(self.m, self.n)
 
@@ -255,11 +274,8 @@ class DatasetFromFolder(data.Dataset):
         self.E = self.aggregate(es).to(self.device).view(1,-1)
         self.V = self.aggregate(vs).to(self.device)
 
-    def loadNext(self):
-        self.f_step += 1
-        self.feature()
-        self.initEC()
         # print '     The index of the next frame', self.f_step, len(self.bbx)
+        return self.gap
 
     def showE(self, outName):
         with torch.no_grad():
