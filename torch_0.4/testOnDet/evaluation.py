@@ -13,10 +13,16 @@ args = parser.parse_args()
 # print (args.res)
 
 
+out = open('res_dir_list.txt', 'a')
+out.write("['%s','%s']\n"%(args.gt, args.res))
+out.close()
+
+
 def motMetrics():
     df_gt = mm.io.loadtxt(args.gt)
     df_test = mm.io.loadtxt(args.res)
     return mm.utils.compare_to_groundtruth(df_gt, df_test, 'iou', distth=0.5)
+
 
 def compute_motchallenge():
     df_gt = mm.io.loadtxt('/home/lee/Desktop/Evaluation/gt.txt')

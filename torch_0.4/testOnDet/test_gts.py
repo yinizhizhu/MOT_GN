@@ -4,7 +4,7 @@ from mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil, commands
-from global_set import edge_initial
+from global_set import edge_initial, test_gt_det
 from test_dataset import DatasetFromFolder
 
 torch.manual_seed(123)
@@ -20,10 +20,8 @@ year = 16
 t_dir = ''  # the dir of the final level
 metrics_dir = ''  # the dir of the motmetrics
 sequence_dir = ''  # the dir of the training dataset
-# seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
-# lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
-seqs = [5, 13]  # the set of sequences
-lengths = [837, 750]  # the length of the sequence
+seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
+lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
 
 
 def cleanText():
@@ -155,7 +153,8 @@ class GN():
         basic_dir = 'MOT16/train/MOT%d-%02d/' % (year, seq)
         seqL = tail if tail != -1 else self.getSeqL(basic_dir + 'seqinfo.ini')
 
-        seq_dir = basic_dir + ('gt/gt.txt' if tag == 0 else 'det/det.txt')
+        det_dir = 'gt/gt_det.txt' if test_gt_det else 'det/det.txt'
+        seq_dir = basic_dir + ('gt/gt.txt' if tag == 0 else det_dir)
         inStream = open(seq_dir, 'r')
 
         outStream = open(gt_seq, 'w')
@@ -221,7 +220,6 @@ class GN():
                 for i in xrange(m):
                     attrs = gtIn.readline().strip().split(',')
                     attrs.append(1)
-                    # print attrs
                     attrs[1] = str(id_step)
                     line = ''
                     for attr in attrs[:-1]:
@@ -232,6 +230,7 @@ class GN():
                     id_con[self.cur].append(id_step)
                     id_step += 1
                 out.close()
+
             for i in xrange(n):
                 attrs = gtIn.readline().strip().split(',')
                 attrs.append(1)
@@ -288,6 +287,7 @@ class GN():
             for (i, j) in results:
                 while i != index:
                     attrs = line_con[self.cur][index]
+                    # print '*', attrs, '*'
                     if attrs[-1] >= gap:
                         attrs[-1] += 1
                         line_con[self.nxt].append(attrs)
@@ -326,11 +326,12 @@ if __name__ == '__main__':
         if not os.path.exists(metric_dir):
             os.mkdir(metric_dir)
 
-        for i in xrange(1, 2):
+        for i in xrange(7):
             seq_index = seqs[i]
-            tts = [tt for tt in xrange(100, 600, 100)]
+            tts = []
+            # tts = [tt for tt in xrange(100, 600, 100)]
             length = lengths[i]
-            # tts.append(length)
+            tts.append(length)
 
             metrics_dir = metric_dir+'%02d.txt'%seq_index
             motmetrics = open(metrics_dir, 'w')
@@ -357,8 +358,8 @@ if __name__ == '__main__':
                 print ' ', sequence_dir
 
                 start = time.time()
-                gn = GN(seq_index, tt, length)
                 print '     Evaluating Graph Network...'
+                gn = GN(seq_index, tt, length)
     except KeyboardInterrupt:
         print 'Time consuming:', time.time()-start
         print ''

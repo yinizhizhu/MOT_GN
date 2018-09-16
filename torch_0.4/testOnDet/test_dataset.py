@@ -4,7 +4,7 @@ import torch.nn as nn
 import numpy as np
 from PIL import Image
 import torch.nn.functional as F
-from global_set import edge_initial
+from global_set import edge_initial, test_gt_det
 from torchvision.transforms import ToTensor
 
 
@@ -30,13 +30,17 @@ class DatasetFromFolder(data.Dataset):
         self.dir = part
         self.cleanPath(part)
         self.img_dir = part + '/img1/'
+        self.gt_dir = part + '/gt/'
         self.det_dir = part + '/det/'
         self.device = torch.device("cuda" if cuda else "cpu")
         self.show = show
 
         self.loadAModel()
         self.getSeqL()
-        self.readBBx()
+        if test_gt_det:
+            self.readBBx_gt()
+        else:
+            self.readBBx_det()
         self.initBuffer()
 
     def cleanPath(self, part):
@@ -62,7 +66,37 @@ class DatasetFromFolder(data.Dataset):
         f.close()
         # print 'The length of the sequence:', self.seqL
 
-    def readBBx(self):
+    def readBBx_gt(self):
+        # get the gt
+        self.bbx = [[] for i in xrange(self.seqL + 1)]
+        gt = self.gt_dir + 'gt.txt'
+        f = open(gt, 'r')
+        pre = -1
+        for line in f.readlines():
+            line = line.strip().split(',')
+            if line[7] == '1':
+                index = int(line[0])
+                id = int(line[1])
+                x, y = int(line[2]), int(line[3])
+                w, h = int(line[4]), int(line[5])
+                conf_score, l, vr = float(line[6]), int(line[7]), float(line[8])
+
+                # sweep the invisible head-bbx from the training data
+                if pre != id and vr == 0:
+                    continue
+
+                pre = id
+                self.bbx[index].append([x, y, w, h, id, conf_score, vr])
+        f.close()
+
+        gt_out = open(self.gt_dir + 'gt_det.txt', 'w')
+        for index in xrange(1, self.seqL+1):
+            for bbx in self.bbx[index]:
+                x,y, w, h, id, conf_score, vr = bbx
+                print >> gt_out, '%d,-1,%d,%d,%d,%d,%f,-1,-1,-1'%(index, x, y, w, h, conf_score)
+        gt_out.close()
+
+    def readBBx_det(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
         det = self.det_dir + 'det.txt'
@@ -210,19 +244,28 @@ class DatasetFromFolder(data.Dataset):
                     x, y < 0 and x+w > W, y+h > H
                 """
                 img = load_img(self.img_dir+'%06d.jpg'%self.f_step)  # initial with loading the first frame
-                x, y, w, h, conf_score = bbx
+                if test_gt_det:
+                    x, y, w, h, id, conf_score, vr = bbx
+                else:
+                    x, y, w, h, conf_score = bbx
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
-                bbx_container.append([x, y, w, h, conf_score])
+                if test_gt_det:
+                    bbx_container.append([x, y, w, h, id, conf_score, vr])
+                else:
+                    bbx_container.append([x, y, w, h, conf_score])
                 crop = img.crop([x, y, x + w, y + h])
                 bbx = crop.resize((224, 224), Image.ANTIALIAS)
                 ret = self.resnet34(bbx)
                 app = ret.data
-                apps.append([app, id])
+                apps.append([app, conf_score])
 
                 if self.show:
                     img = np.asarray(img)
                     crop = np.asarray(crop)
-                    print '%06d'%self.f_step, conf_score, '***',
+                    if test_gt_det:
+                        print '%06d'%self.f_step, id, vr, '***',
+                    else:
+                        print '%06d'%self.f_step, conf_score, vr, '***',
                     print w, h, '-',
                     print len(crop[0]), len(crop)
                     cv2.imshow('crop', crop)

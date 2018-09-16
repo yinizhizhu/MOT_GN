@@ -12,14 +12,14 @@ t_dir = ''  # the dir of the final level
 seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
 lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
 
-target = 'gts'  # inner, cross, gts
+target = 'inner_dets'  # inner, cross, gts
 
 type_dir = 'IoU' if edge_initial == 0 else 'Random'
 
 metric_dir = 'Results/MOT%d/MotMetrics_%s/' % (year, type_dir)
 target_metric = 'Results/MOT%d/MotMetrics_%s_%s' % (year, type_dir, target)
 print metric_dir, target_metric
-os.rename(metric_dir, target_metric)
+# os.rename(metric_dir, target_metric)
 
 
 def rename():
@@ -29,7 +29,7 @@ def rename():
         os.mkdir(out_dir)
         print 'There is no dir:', out_dir
     print '     ', out_dir, target_dir
-    os.rename(out_dir, target_dir)
+    # os.rename(out_dir, target_dir)
 
 
 if __name__ == '__main__':
@@ -48,6 +48,7 @@ if __name__ == '__main__':
 
         for i in xrange(7):
             seq_index = seqs[i]
+            # tts = []
             tts = [tt for tt in xrange(100, 600, 100)]
             length = lengths[i]
             # tts.append(length)
