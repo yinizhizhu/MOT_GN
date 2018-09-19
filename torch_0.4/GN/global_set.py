@@ -11,6 +11,9 @@ u_s, e_s = 1, 1  # u_s - Uphi, e_s - Ephi
 train_test = 100  # n for training, n for testing
 u_evaluation = 0  # 1 - initiate randomly, 0 - initiate with the u learned
 
+test_gt_det = 0  # 1 - detections of gt, 0 - detections of det
+
+tau_conf_score = 0.0  # The threshold of confidence score
 # edge_init|                       random                       |
 #  u_init  |        random           |            learned
 #          |   pre-lr  |     lr      |     pre-lr    |    lr    |

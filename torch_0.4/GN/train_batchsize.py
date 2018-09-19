@@ -83,11 +83,11 @@ class GN():
         print '     Logging...'
         self.log(t_data)
 
-    def getEdges(self):
+    def getEdges(self):  # the statistic data of the graph among two frames' detections
         self.train_set.setBuffer(1)
         step = 1
         edge_counter = 0.0
-        for head in xrange(self.train_test):
+        for head in xrange(1, self.train_test):
             self.train_set.loadNext()  # Get the next frame
             edge_counter += self.train_set.m * self.train_set.n
             step += 1
@@ -127,20 +127,12 @@ class GN():
             self.u = torch.FloatTensor([0.0 for i in xrange(u_num)]).view(1, -1)
         self.u = self.u.to(self.device)
 
-    def aggregate(self, set):
-        if len(set):
-            num = len(set)
-            rho = sum(set)
-            return rho/num
-        print '     The set is empty!'
-        return None
-
     def updateNetwork(self):
         self.train_set.setBuffer(1)
         step = 1
         average_epoch = 0
         edge_counter = 0.0
-        for head in xrange(self.train_test):
+        for head in xrange(1, self.train_test):
             self.train_set.loadNext()  # Get the next frame
             edge_counter += self.train_set.m * self.train_set.n
             start = time.time()
@@ -276,7 +268,7 @@ class GN():
         self.train_set.setBuffer(head)
         total_gt = 0.0
         total_ed = 0.0
-        for step in xrange(self.train_test):
+        for step in xrange(1, self.train_test):
             self.train_set.loadNext()
             print head+step, 'F',
 
@@ -376,7 +368,7 @@ if __name__ == '__main__':
                 print sequence_dir
 
                 start = time.time()
-                gn = GN(tt-1, tag)
+                gn = GN(tt, tag)
                 print '     Starting Graph Network...'
                 gn.update()
     except KeyboardInterrupt:

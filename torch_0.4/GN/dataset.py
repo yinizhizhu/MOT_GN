@@ -35,7 +35,6 @@ class DatasetFromFolder(data.Dataset):
         self.outName = outName
         self.device = torch.device("cuda" if cuda else "cpu")
         self.show = show
-        self.step_ed = 0.0
 
         self.loadAModel()
         self.getSeqL()
@@ -68,7 +67,7 @@ class DatasetFromFolder(data.Dataset):
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
-        gt = self.gt_dir + '/gt.txt'
+        gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
         pre = -1
         for line in f.readlines():
@@ -78,7 +77,7 @@ class DatasetFromFolder(data.Dataset):
                 id = int(line[1])
                 x, y = int(line[2]), int(line[3])
                 w, h = int(line[4]), int(line[5])
-                l, vr = int(line[7]), float(line[8])
+                conf_score, l, vr = float(line[6]), int(line[7]), float(line[8])
 
                 # sweep the invisible head-bbx from the training data
                 if pre != id and vr == 0:
@@ -111,14 +110,6 @@ class DatasetFromFolder(data.Dataset):
         w -= x
         h -= y
         return x, y, w, h
-
-    def resnet34(self, img):
-        bbx = ToTensor()(img)
-        bbx = bbx.to(self.device)
-        bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
-        ret = self.Appearance(bbx)
-        ret = ret.view(1, -1)
-        return ret
 
     def IOU(self, Reframe, GTframe):
         """
@@ -195,6 +186,14 @@ class DatasetFromFolder(data.Dataset):
         self.cur = self.cur ^ self.nxt
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
+
+    def resnet34(self, img):
+        bbx = ToTensor()(img)
+        bbx = bbx.to(self.device)
+        bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
+        ret = self.Appearance(bbx)
+        ret = ret.view(1, -1)
+        return ret
 
     def feature(self, tag=0):
         '''
