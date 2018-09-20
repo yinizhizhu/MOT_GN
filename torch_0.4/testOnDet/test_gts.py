@@ -4,7 +4,7 @@ from mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil, commands
-from global_set import edge_initial, test_gt_det
+from global_set import edge_initial, test_gt_det, tau_conf_score
 from test_dataset import DatasetFromFolder
 
 torch.manual_seed(123)
@@ -44,6 +44,7 @@ class GN():
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tt = tt
         self.length = length
+        self.missingCounter = 0
 
         print '     Loading the model...'
         self.loadModel()
@@ -86,18 +87,27 @@ class GN():
             # Evaluating on the validation data
             start = time.time()
             print '     Validation'
+
+            # The distant sequence
+            head = self.length - self.tt + 1
+            tail = self.length
+
+            # The sequence nearby
+            # head = self.tt
+            # tail = 2*self.tt-1
+
             gt_valiadation = self.out_dir + 'gt_validation.txt'  # the gt of the validation data
-            self.copyLines(self.seq_index, self.tt, gt_valiadation, self.length)
+            self.copyLines(self.seq_index, head, gt_valiadation, tail)
 
             detection_dir = self.out_dir + 'res_validation_det.txt'
             res_validation = self.out_dir + 'res_validation.txt'  # the result of the validation data
             self.createTxt(detection_dir)
             self.createTxt(res_validation)
-            self.copyLines(self.seq_index, self.tt, detection_dir, self.length, 1)
+            self.copyLines(self.seq_index, head, detection_dir, tail, 1)
 
             motmetrics = open(metrics_dir, 'a')
             print >> motmetrics, 'Validation'
-            self.evaluation(self.tt, self.length, detection_dir, res_validation)
+            self.evaluation(head, tail, detection_dir, res_validation)
             cmd = 'python3 evaluation.py %s %s'%(gt_valiadation, res_validation)
             (status, output) = commands.getstatusoutput(cmd)
             print >> motmetrics, output
@@ -184,6 +194,26 @@ class GN():
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
 
+    def linearModel(self, out, attr1, attr2):
+        t = attr1[-1]
+        x1, y1, w1, h1 = float(attr1[2]), float(attr1[3]), float(attr1[4]), float(attr1[5])
+        x2, y2, w2, h2 = float(attr2[2]), float(attr2[3]), float(attr2[4]), float(attr2[5])
+
+        x_delta = (x2-x1)/t
+        y_delta = (y2-y1)/t
+        attr1[4] = str((w1+w2)/2)
+        attr1[5] = str((h1+h2)/2)
+
+        for i in xrange(1, t):
+            attr1[2] = str(x1+x_delta)
+            attr1[3] = str(y1+y_delta)
+            line = ''
+            for attr in attr1[:-1]:
+                line += attr + ','
+            line = line[:-1]
+            print >> out, line
+        self.missingCounter += t-1
+
     def evaluation(self, head, tail, gtFile, outFile):
         '''
         Evaluation on dets
@@ -200,7 +230,6 @@ class GN():
         id_step = 1
 
         step = head + self.train_set.setBuffer(head)
-        print step, head
         while step < tail:
             step += self.train_set.loadNext()
             # print head+step, 'F',
@@ -217,25 +246,31 @@ class GN():
 
             if id_step == 1:
                 out = open(outFile, 'a')
-                for i in xrange(m):
+                i = 0
+                while i < m:
                     attrs = gtIn.readline().strip().split(',')
-                    attrs.append(1)
-                    attrs[1] = str(id_step)
-                    line = ''
-                    for attr in attrs[:-1]:
-                        line += attr + ','
-                    line = line[:-1]
-                    print >> out, line
-                    line_con[self.cur].append(attrs)
-                    id_con[self.cur].append(id_step)
-                    id_step += 1
+                    if float(attrs[6]) >= tau_conf_score:
+                        attrs.append(1)
+                        attrs[1] = str(id_step)
+                        line = ''
+                        for attr in attrs[:-1]:
+                            line += attr + ','
+                        line = line[:-1]
+                        print >> out, line
+                        line_con[self.cur].append(attrs)
+                        id_con[self.cur].append(id_step)
+                        id_step += 1
+                        i += 1
                 out.close()
 
-            for i in xrange(n):
+            i = 0
+            while i < n:
                 attrs = gtIn.readline().strip().split(',')
-                attrs.append(1)
-                line_con[self.nxt].append(attrs)
-                id_con[self.nxt].append(-1)
+                if float(attrs[6]) >= tau_conf_score:
+                    attrs.append(1)
+                    line_con[self.nxt].append(attrs)
+                    id_con[self.nxt].append(-1)
+                    i += 1
 
             # update the edges
             # print 'T',
@@ -264,6 +299,9 @@ class GN():
                 attrs = line_con[self.nxt][j]
                 # print attrs
                 attrs[1] = str(id)
+                if attrs[-1] > 1:
+                    # for the missing detections
+                    self.linearModel(out, line_con[self.cur][i], attrs)
                 line = ''
                 for attr in attrs[:-1]:
                     line += attr + ','
@@ -328,10 +366,10 @@ if __name__ == '__main__':
 
         for i in xrange(7):
             seq_index = seqs[i]
-            tts = []
-            # tts = [tt for tt in xrange(100, 600, 100)]
+            # tts = []
+            tts = [tt for tt in xrange(100, 600, 100)]
             length = lengths[i]
-            tts.append(length)
+            # tts.append(length)
 
             metrics_dir = metric_dir+'%02d.txt'%seq_index
             motmetrics = open(metrics_dir, 'w')
@@ -360,6 +398,7 @@ if __name__ == '__main__':
                 start = time.time()
                 print '     Evaluating Graph Network...'
                 gn = GN(seq_index, tt, length)
+                print '     Recover the number missing detections:', gn.missingCounter
     except KeyboardInterrupt:
         print 'Time consuming:', time.time()-start
         print ''
