@@ -1,6 +1,7 @@
 clc;
 clear;
 
+addpath(genpath('.'));
 benchmark = 'MOT16';
 % Benchmark specific properties
 world = 0;
@@ -19,6 +20,10 @@ end
 
 seqs = [2, 4, 5, 9, 10, 11, 13]; % the set of sequences
 lengths = [600, 1050, 837, 525, 654, 900, 750]; % the length of the sequence
+% types = {'dets', 'balanced_dets', 'balancedNearby_dets'};
+% types = {'balanced_FP_dets', 'balancedNearby_FP_dets'};
+% types = {'dets', 'balanced_dets', 'balanced_FP_dets', ...
+%     'balancedNearby_dets', 'balancedNearby_FP_dets'};
 types = {'dets', 'gts', 'balanced_dets', 'balanced_gts', 'balanced_FP_dets', ...
     'balancedNearby_dets', 'balancedNearby_gts', 'balancedNearby_FP_dets'};
 
@@ -32,7 +37,6 @@ for i=1:length(seqs)    % Iteration for sequence
     % Output the result of motmetrics into the text file
     motmetrics_dir = fullfile(metrics_dir, sprintf('%s.txt', seq_index));
     fout = fopen(motmetrics_dir, 'w');
-    disp(motmetrics_dir);
 
     % the length of the training dataset
     tts = [];
@@ -41,8 +45,6 @@ for i=1:length(seqs)    % Iteration for sequence
         tts(j) = tt;
         j = j+1;
     end
-    %tts(j) = len; % for the cross evaluation
-%     disp(tts);
 
     f_dir = fullfile(basic_dir, seq_index);
     disp(f_dir);
@@ -156,7 +158,7 @@ for i=1:length(seqs)    % Iteration for sequence
                 allMets(ind).m    = mets;
                 allMets(ind).IDmeasures = metsID;
                 allMets(ind).additionalInfo = additionalInfo;
-                fprintf('%s_%s\n', seq_name, types{k}); printMetrics(mets); fprintf('\n');
+                fprintf('%s_%s\n', seq_name, types{k}); printMetrics(mets);
                 fprintf(fout, '%s_%s', seq_name, types{k});
                 for l=1:length(mets)
                     fprintf(fout,'\t%f', mets(l));
@@ -166,33 +168,14 @@ for i=1:length(seqs)    % Iteration for sequence
 
             % Overall scores
             metsBenchmark = evaluateBenchmark(allMets, world);
-            fprintf('\n');
             fprintf(' ********************* Your %s Results *********************\n', benchmark);
-            printMetrics(metsBenchmark);
+            printMetrics(metsBenchmark); fprintf('\n');
             fprintf(fout, 'OVERALL');
             for k=1:length(metsBenchmark)
                 fprintf(fout,'\t%f', metsBenchmark(k));
             end
-            fprintf(fout, '\n');
+            fprintf(fout, '\n\n');
         end
     end
     fclose(fout);
 end
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
