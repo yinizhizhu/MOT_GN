@@ -17,20 +17,15 @@ def deleteDir(del_dir):
 gap = 25
 year = 16
 t_dir = ''  # the dir of the final level
-# metrics_dir = ''  # the dir of the motmetrics
 sequence_dir = ''  # the dir of the training dataset
 seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
+test_seqs = [1, 3, 6, 7, 8, 12, 14]
 lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
-
-
-# def cleanText():
-#     out = open('res_dir_list.txt', 'w')
-#     out.close()
-# cleanText()
+test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
 
 
 class GN():
-    def __init__(self, seq_index, tt, length, cuda=True):
+    def __init__(self, seq_index, tt, cuda=True):
         '''
         Evaluating with the MotMetrics
         :param seq_index: the number of the sequence
@@ -42,7 +37,6 @@ class GN():
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tt = tt
-        self.length = length
         self.missingCounter = 0
 
         print '     Loading the model...'
@@ -57,13 +51,9 @@ class GN():
         self.initOut()
 
     def initOut(self):
-        start = time.time()
         print '     Loading Data...'
         print '     Training'
         self.train_set = DatasetFromFolder(sequence_dir)
-
-        gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
-        self.copyLines(self.seq_index, 1, gt_training, self.tt)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -71,73 +61,7 @@ class GN():
         self.createTxt(res_training)
         self.copyLines(self.seq_index, 1, detection_dir, self.tt, 1)
 
-        # Evaluating on the training data
-        # motmetrics = open(metrics_dir, 'a')
-        # print >> motmetrics, '*'*30, self.tt, '*'*30
-        # print >> motmetrics, 'Training'
         self.evaluation(1, self.tt, detection_dir, res_training)
-        # cmd = 'python3 evaluation.py %s %s'%(gt_training, res_training)
-        # (status, output) = commands.getstatusoutput(cmd)
-        # print >> motmetrics, output
-        # print >> motmetrics, 'The time consuming:{}\n\n'.format((time.time()-start)/60)
-        # motmetrics.close()
-
-        if self.tt < self.length:
-            # Evaluating on the validation data
-            start = time.time()
-            print '     Validation'
-
-            # The distant sequence
-            head = self.length - self.tt + 1
-            tail = self.length
-
-            # The sequence nearby
-            # head = self.tt
-            # tail = 2*self.tt-1
-
-            gt_valiadation = self.out_dir + 'gt_validation.txt'  # the gt of the validation data
-            self.copyLines(self.seq_index, head, gt_valiadation, tail)
-
-            detection_dir = self.out_dir + 'res_validation_det.txt'
-            res_validation = self.out_dir + 'res_validation.txt'  # the result of the validation data
-            self.createTxt(detection_dir)
-            self.createTxt(res_validation)
-            self.copyLines(self.seq_index, head, detection_dir, tail, 1)
-
-            # motmetrics = open(metrics_dir, 'a')
-            # print >> motmetrics, 'Validation'
-            self.evaluation(head, tail, detection_dir, res_validation)
-            # cmd = 'python3 evaluation.py %s %s'%(gt_valiadation, res_validation)
-            # (status, output) = commands.getstatusoutput(cmd)
-            # print >> motmetrics, output
-            # print >> motmetrics, 'The time consuming:{}\n\n'.format((time.time()-start)/60)
-            # motmetrics.close()
-        else:
-            # Evaluating on the validation data
-            for seq in seqs:
-                if seq == self.seq_index:
-                    continue
-                print '     %02d_Validation'%seq
-                start = time.time()
-                seq_dir = 'MOT16/train/MOT%d-%02d' % (year, seq)
-                self.train_set = DatasetFromFolder(seq_dir)
-                gt_seq = self.out_dir + 'gt_%02d.txt' % seq
-                seqL = self.copyLines(seq, 1, gt_seq)
-
-                detection_dir = self.out_dir + 'res_%02d_det.txt' % seq
-                c_validation = self.out_dir + 'res_%02d.txt' % seq
-                self.createTxt(detection_dir)
-                self.createTxt(c_validation)
-                self.copyLines(seq, 1, detection_dir, tag=1)
-
-                # motmetrics = open(metrics_dir, 'a')
-                # print >> motmetrics, '%02d_validation'%seq
-                self.evaluation(1, seqL, detection_dir, c_validation)
-                # cmd = 'python3 evaluation.py %s %s'%(gt_seq, c_validation)
-                # (status, output) = commands.getstatusoutput(cmd)
-                # print >> motmetrics, output
-                # print >> motmetrics, 'The time consuming:{}\n\n'.format((time.time()-start)/60)
-                # motmetrics.close()
 
     def getSeqL(self, info):
         # get the length of the sequence
@@ -159,7 +83,7 @@ class GN():
         :param gt_seq: the dir of the output file
         :return: None
         '''
-        basic_dir = 'MOT16/train/MOT%d-%02d/' % (year, seq)
+        basic_dir = 'MOT16/test/MOT%d-%02d/' % (year, seq)
         seqL = tail if tail != -1 else self.getSeqL(basic_dir + 'seqinfo.ini')
 
         det_dir = 'gt/gt_det.txt' if test_gt_det else 'det/det.txt'
@@ -366,46 +290,29 @@ if __name__ == '__main__':
         if not os.path.exists(f_dir):
             print f_dir, 'does not exist!'
 
-        type_dir = 'IoU' if edge_initial == 0 else 'Random'
-        metric_dir = 'Results/MOT%d/MotMetrics_%s/' % (year, type_dir)
-        if not os.path.exists(metric_dir):
-            os.mkdir(metric_dir)
-
         for i in xrange(7):
             seq_index = seqs[i]
             tts = []
             # tts = [tt for tt in xrange(100, 600, 100)]
-            length = lengths[i]
-            tts.append(length)
+            tt = lengths[i]
+            print 'The sequence:', seq_index, '- The length of the training data:', tt
 
-            # metrics_dir = metric_dir+'%02d.txt'%seq_index
-            # motmetrics = open(metrics_dir, 'w')
-            # motmetrics.close()
-            for tt in tts:
-                tag = 1
-                if tt*2 > length:
-                    if tt == length:
-                        tag = 0
-                    else:
-                        continue
-                print 'The sequence:', seq_index, '- The length of the training data:', tt
+            s_dir = f_dir + '%02d/' % seq_index
+            if not os.path.exists(s_dir):
+                print s_dir, 'does not exist!'
 
-                s_dir = f_dir + '%02d/' % seq_index
-                if not os.path.exists(s_dir):
-                    print s_dir, 'does not exist!'
+            t_dir = s_dir + '%d/' % tt
+            if not os.path.exists(t_dir):
+                print t_dir, 'does not exist!'
 
-                t_dir = s_dir + '%d/' % tt
-                if not os.path.exists(t_dir):
-                    print t_dir, 'does not exist!'
+            seq_dir = 'MOT%d-%02d' % (year, test_seqs[i])
+            sequence_dir = 'MOT16/test/' + seq_dir
+            print ' ', sequence_dir
 
-                seq_dir = 'MOT%d-%02d' % (year, seq_index)
-                sequence_dir = 'MOT16/train/' + seq_dir
-                print ' ', sequence_dir
-
-                start = time.time()
-                print '     Evaluating Graph Network...'
-                gn = GN(seq_index, tt, length)
-                print '     Recover the number missing detections:', gn.missingCounter
+            start = time.time()
+            print '     Evaluating Graph Network...'
+            gn = GN(test_seqs[i], test_lengths[i])
+            print '     Recover the number missing detections:', gn.missingCounter
     except KeyboardInterrupt:
         print 'Time consuming:', time.time()-start
         print ''
