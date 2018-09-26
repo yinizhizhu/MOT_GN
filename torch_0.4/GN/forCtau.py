@@ -4,7 +4,7 @@ from mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil, commands
-from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold
+from global_set import edge_initial, test_gt_det, tau_conf_score
 from test_dataset import DatasetFromFolder
 
 torch.manual_seed(123)
@@ -38,13 +38,16 @@ class GN():
         :param length: the number of frames which is used for training
         :param cuda: True - GPU, False - CPU
         '''
+
+        # top index: 0 - correct matching, 1 - false matching, second index: 0 - min, 1 - max, 2 - total, 3 - counter
+        self.ctau = [[1.0, 0.0, 0.0, 0] for i in xrange(2)]  # get the threshold for matching cost
+
         self.seq_index = seq_index
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tt = tt
         self.length = length
         self.missingCounter = 0
-        self.sideConnection = 0
 
         print '     Loading the model...'
         self.loadModel()
@@ -197,35 +200,13 @@ class GN():
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
 
-    def linearModel(self, out, attr1, attr2):
-        print 'I got you! *.*'
-        t = attr1[-1]
-        self.sideConnection += 1
-        if t > 5:
-            return
-        x1, y1, w1, h1 = float(attr1[2]), float(attr1[3]), float(attr1[4]), float(attr1[5])
-        x2, y2, w2, h2 = float(attr2[2]), float(attr2[3]), float(attr2[4]), float(attr2[5])
-
-        x_delta = (x2-x1)/t
-        y_delta = (y2-y1)/t
-        w_delta = (w2-w1)/t
-        h_delta = (h2-h1)/t
-
-        for i in xrange(1, t):
-            x1 += x_delta
-            y1 += y_delta
-            w1 += w_delta
-            h1 += h_delta
-            attr1[2] = str(x1)
-            attr1[3] = str(y1)
-            attr1[4] = str(w1)
-            attr1[5] = str(h1)
-            line = ''
-            for attr in attr1[:-1]:
-                line += attr + ','
-            line = line[:-1]
-            print >> out, line
-        self.missingCounter += t-1
+    def showCTau(self):
+        for i in xrange(2):
+            print '     Min:', self.ctau[i][0], 'Max:', self.ctau[i][1],
+            if self.ctau[i][3]:
+                print 'Mean:', self.ctau[i][2]/self.ctau[i][3]
+            else:
+                print 'Total:', self.ctau[i][2], 'Counter:', self.ctau[i][3]
 
     def evaluation(self, head, tail, gtFile, outFile):
         '''
@@ -239,7 +220,6 @@ class GN():
         gtIn = open(gtFile, 'r')
         self.cur, self.nxt = 0, 1
         line_con = [[], []]
-        id_con = [[], []]
         id_step = 1
 
         step = head + self.train_set.setBuffer(head)
@@ -257,23 +237,13 @@ class GN():
                 break
 
             if id_step == 1:
-                out = open(outFile, 'a')
                 i = 0
                 while i < m:
                     attrs = gtIn.readline().strip().split(',')
                     if float(attrs[6]) >= tau_conf_score:
-                        attrs.append(1)
-                        attrs[1] = str(id_step)
-                        line = ''
-                        for attr in attrs[:-1]:
-                            line += attr + ','
-                        line = line[:-1]
-                        print >> out, line
                         line_con[self.cur].append(attrs)
-                        id_con[self.cur].append(id_step)
                         id_step += 1
                         i += 1
-                out.close()
 
             i = 0
             while i < n:
@@ -281,7 +251,6 @@ class GN():
                 if float(attrs[6]) >= tau_conf_score:
                     attrs.append(1)
                     line_con[self.nxt].append(attrs)
-                    id_con[self.nxt].append(-1)
                     i += 1
 
             # update the edges
@@ -302,55 +271,19 @@ class GN():
 
             # for j in ret:
             #     print j
-            results = self.hungarian.compute(ret)
-
-            out = open(outFile, 'a')
-            for (i, j) in results:
-                # print (i,j)
-                if ret[i][j] >= tau_threshold:
-                    continue
-                id = id_con[self.cur][i]
-                id_con[self.nxt][j] = id
-                attrs = line_con[self.nxt][j]
-                # print attrs
-                attrs[1] = str(id)
-                if attrs[-1] > 1:
-                    # for the missing detections
-                    self.linearModel(out, line_con[self.cur][i], attrs)
-                line = ''
-                for attr in attrs[:-1]:
-                    line += attr + ','
-                line = line[:-1]
-                print >> out, line
-
-            for i in xrange(n):
-                if id_con[self.nxt][i] == -1:
-                    id_con[self.nxt][i] = id_step
-                    attrs = line_con[self.nxt][i]
-                    attrs[1] = str(id_step)
-                    line = ''
-                    for attr in attrs[:-1]:
-                        line += attr + ','
-                    line = line[:-1]
-                    print >> out, line
-                    id_step += 1
-            out.close()
-
-            index = 0
-            for (i, j) in results:
-                while i != index:
-                    attrs = line_con[self.cur][index]
-                    # print '*', attrs, '*'
-                    if attrs[-1] >= gap:
-                        attrs[-1] += 1
-                        line_con[self.nxt].append(attrs)
-                        id_con[self.nxt].append(id_con[self.cur][index])
-                        self.train_set.moveApp(index)
-                    index += 1
-                index += 1
+            for i in xrange(m):
+                a_attrs = line_con[self.cur][i]
+                for j in xrange(n):
+                    index = 1
+                    cost = ret[i][j]
+                    if a_attrs[1] == line_con[self.nxt][j][1]:
+                        index = 0
+                    self.ctau[index][0] = min(self.ctau[index][0], cost)
+                    self.ctau[index][1] = max(self.ctau[index][1], cost)
+                    self.ctau[index][2] += cost
+                    self.ctau[index][3] += 1
 
             line_con[self.cur] = []
-            id_con[self.cur] = []
             # print head+step, results
             self.train_set.swapFC()
             self.swapFC()
@@ -360,6 +293,7 @@ class GN():
         # out = open(outFile, 'a')
         # print >> out, tra_tst
         # out.close()
+        self.showCTau()
 
 if __name__ == '__main__':
     try:
@@ -380,12 +314,12 @@ if __name__ == '__main__':
         if not os.path.exists(metric_dir):
             os.mkdir(metric_dir)
 
-        for i in xrange(1,7):
+        for i in xrange(7):
             seq_index = seqs[i]
-            # tts = []
-            tts = [tt for tt in xrange(100, 600, 100)]
+            tts = []
+            # tts = [tt for tt in xrange(100, 600, 100)]
             length = lengths[i]
-            # tts.append(length)
+            tts.append(length)
 
             # metrics_dir = metric_dir+'%02d.txt'%seq_index
             # motmetrics = open(metrics_dir, 'w')
@@ -415,7 +349,6 @@ if __name__ == '__main__':
                 print '     Evaluating Graph Network...'
                 gn = GN(seq_index, tt, length)
                 print '     Recover the number missing detections:', gn.missingCounter
-                print '     The number of sideConnections:', gn.sideConnection
                 print 'Time consuming:', (time.time()-start)/60.0
     except KeyboardInterrupt:
         print 'Time consuming:', (time.time()-start)/60

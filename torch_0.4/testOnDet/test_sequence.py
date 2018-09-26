@@ -4,7 +4,7 @@ from mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil, commands
-from global_set import edge_initial, test_gt_det, tau_conf_score
+from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold
 from test_dataset import DatasetFromFolder
 
 torch.manual_seed(123)
@@ -38,6 +38,7 @@ class GN():
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tt = tt
         self.missingCounter = 0
+        self.sideConnection = 0
 
         print '     Loading the model...'
         self.loadModel()
@@ -119,6 +120,7 @@ class GN():
 
     def linearModel(self, out, attr1, attr2):
         t = attr1[-1]
+        self.sideConnection += 1
         if t > 5:
             return
         x1, y1, w1, h1 = float(attr1[2]), float(attr1[3]), float(attr1[4]), float(attr1[5])
@@ -173,7 +175,6 @@ class GN():
             if n==0:
                 print 'There is no detection in the rest of sequence!'
                 break
-            ret = [[0.0 for i in xrange(n)] for j in xrange(m)]
 
             if id_step == 1:
                 out = open(outFile, 'a')
@@ -205,6 +206,7 @@ class GN():
 
             # update the edges
             # print 'T',
+            ret = [[0.0 for i in xrange(n)] for j in xrange(m)]
             for edge in self.train_set.candidates:
                 e, vs_index, vr_index = edge
                 e = e.to(self.device).view(1,-1)
@@ -225,6 +227,8 @@ class GN():
             out = open(outFile, 'a')
             for (i, j) in results:
                 # print (i,j)
+                if ret[i][j] >= tau_threshold:
+                    continue
                 id = id_con[self.cur][i]
                 id_con[self.nxt][j] = id
                 attrs = line_con[self.nxt][j]
@@ -261,6 +265,7 @@ class GN():
                         attrs[-1] += 1
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
+                        self.train_set.moveApp(index)
                     index += 1
                 index += 1
 
@@ -313,8 +318,10 @@ if __name__ == '__main__':
             print '     Evaluating Graph Network...'
             gn = GN(test_seqs[i], test_lengths[i])
             print '     Recover the number missing detections:', gn.missingCounter
+            print '     The number of sideConnections:', gn.sideConnection
+            print 'Time consuming:', (time.time()-start)/60.0
     except KeyboardInterrupt:
-        print 'Time consuming:', time.time()-start
+        print 'Time consuming:', (time.time()-start)/60.0
         print ''
         print '-'*90
         print 'Existing from training early.'

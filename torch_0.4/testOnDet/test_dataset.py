@@ -4,7 +4,7 @@ import torch.nn as nn
 import numpy as np
 from PIL import Image
 import torch.nn.functional as F
-from global_set import edge_initial, test_gt_det
+from global_set import edge_initial, test_gt_det, tau_conf_score
 from torchvision.transforms import ToTensor
 
 
@@ -108,8 +108,8 @@ class DatasetFromFolder(data.Dataset):
             x, y = int(float(line[2])), int(float(line[3]))
             w, h = int(float(line[4])), int(float(line[5]))
             conf_score = float(line[6])
-
-            self.bbx[index].append([x, y, w, h, conf_score])
+            if conf_score >= tau_conf_score:
+                self.bbx[index].append([x, y, w, h, conf_score])
         f.close()
 
     def initBuffer(self):
@@ -214,6 +214,9 @@ class DatasetFromFolder(data.Dataset):
                 ans = torch.cat((ans, self.detections[cur][index[i]][0]), dim=0)
             return ans
         return self.detections[cur][index][0]
+
+    def moveApp(self, index):
+        self.detections[self.nxt].append(self.detections[self.cur][index])
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
