@@ -216,7 +216,8 @@ class DatasetFromFolder(data.Dataset):
         return self.detections[cur][index][0]
 
     def moveApp(self, index):
-        self.detections[self.nxt].append(self.detections[self.cur][index])
+        self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx
+        self.detections[self.nxt].append(self.detections[self.cur][index])   # add the appearance
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt

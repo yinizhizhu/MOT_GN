@@ -16,12 +16,17 @@ def deleteDir(del_dir):
 
 gap = 25
 year = 16
+
 t_dir = ''  # the dir of the final level
 sequence_dir = ''  # the dir of the training dataset
+
 seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
-test_seqs = [1, 3, 6, 7, 8, 12, 14]
 lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+
+test_seqs = [1, 3, 6, 7, 8, 12, 14]
 test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
+
+tt_tag = 1  # 1 - test, 0 - train
 
 
 class GN():
@@ -83,7 +88,10 @@ class GN():
         :param gt_seq: the dir of the output file
         :return: None
         '''
-        basic_dir = 'MOT16/test/MOT%d-%02d/' % (year, seq)
+        if tt_tag:
+            basic_dir = 'MOT16/test/MOT%d-%02d/' % (year, seq)
+        else:
+            basic_dir = 'MOT16/train/MOT%d-%02d/' % (year, seq)
         print '     Testing on', basic_dir, 'Length:', self.tt
         seqL = tail if tail != -1 else self.getSeqL(basic_dir + 'seqinfo.ini')
 
@@ -108,9 +116,9 @@ class GN():
         f.close()
 
     def loadModel(self):
-        self.Uphi = torch.load(t_dir+'uphi.pth').to(self.device)
-        self.Ephi = torch.load(t_dir+'ephi.pth').to(self.device)
-        self.u = torch.load(t_dir+'u.pth')
+        self.Uphi = torch.load('Results/MOT16/IoU/all/uphi_13.pth').to(self.device)
+        self.Ephi = torch.load('Results/MOT16/IoU/all/ephi_13.pth').to(self.device)
+        self.u = torch.load('Results/MOT16/IoU/all/u_13.pth')
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -119,7 +127,7 @@ class GN():
         self.cur = self.cur ^ self.nxt
 
     def linearModel(self, out, attr1, attr2):
-        print 'I got you! *.*'
+        # print 'I got you! *.*'
         t = attr1[-1]
         self.sideConnection += 1
         if t > 5:
@@ -147,7 +155,8 @@ class GN():
             line = ''
             for attr in attr1[:-1]:
                 line += attr + ','
-            line = line[:-1]
+            # line = line[:-1]
+            line += '1'
             print >> out, line
         self.missingCounter += t-1
 
@@ -191,7 +200,8 @@ class GN():
                         line = ''
                         for attr in attrs[:-1]:
                             line += attr + ','
-                        line = line[:-1]
+                        # line = line[:-1]
+                        line += '0'
                         print >> out, line
                         line_con[self.cur].append(attrs)
                         id_con[self.cur].append(id_step)
@@ -245,7 +255,8 @@ class GN():
                 line = ''
                 for attr in attr2[:-1]:
                     line += attr + ','
-                line = line[:-1]
+                # line = line[:-1]
+                line += '0'
                 print >> out, line
 
             for i in xrange(n):
@@ -256,7 +267,8 @@ class GN():
                     line = ''
                     for attr in attrs[:-1]:
                         line += attr + ','
-                    line = line[:-1]
+                    # line = line[:-1]
+                    line += '0'
                     print >> out, line
                     id_step += 1
             out.close()
@@ -314,13 +326,22 @@ if __name__ == '__main__':
             if not os.path.exists(t_dir):
                 print t_dir, 'does not exist!'
 
-            seq_dir = 'MOT%d-%02d' % (year, test_seqs[i])
-            sequence_dir = 'MOT16/test/' + seq_dir
-            print ' ', sequence_dir
+            if tt_tag:
+                seq_dir = 'MOT%d-%02d' % (year, test_seqs[i])
+                sequence_dir = 'MOT16/test/' + seq_dir
+                print ' ', sequence_dir
 
-            start = time.time()
-            print '     Evaluating Graph Network...'
-            gn = GN(test_seqs[i], test_lengths[i])
+                start = time.time()
+                print '     Evaluating Graph Network...'
+                gn = GN(test_seqs[i], test_lengths[i])
+            else:
+                seq_dir = 'MOT%d-%02d' % (year, seqs[i])
+                sequence_dir = 'MOT16/train/' + seq_dir
+                print ' ', sequence_dir
+
+                start = time.time()
+                print '     Evaluating Graph Network...'
+                gn = GN(seqs[i], lengths[i])
             print '     Recover the number missing detections:', gn.missingCounter
             print '     The number of sideConnections:', gn.sideConnection
             print 'Time consuming:', (time.time()-start)/60.0

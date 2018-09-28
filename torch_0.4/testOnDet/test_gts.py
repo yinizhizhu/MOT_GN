@@ -187,9 +187,14 @@ class GN():
         f.close()
 
     def loadModel(self):
-        self.Uphi = torch.load(t_dir+'uphi.pth').to(self.device)
-        self.Ephi = torch.load(t_dir+'ephi.pth').to(self.device)
-        self.u = torch.load(t_dir+'u.pth')
+        # self.Uphi = torch.load(t_dir+'uphi.pth').to(self.device)
+        # self.Ephi = torch.load(t_dir+'ephi.pth').to(self.device)
+        # self.u = torch.load(t_dir+'u.pth')
+        # self.u = self.u.to(self.device)
+
+        self.Uphi = torch.load('Results/MOT16/IoU/all/uphi_13.pth').to(self.device)
+        self.Ephi = torch.load('Results/MOT16/IoU/all/ephi_13.pth').to(self.device)
+        self.u = torch.load('Results/MOT16/IoU/all/u_13.pth')
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -198,11 +203,12 @@ class GN():
         self.cur = self.cur ^ self.nxt
 
     def linearModel(self, out, attr1, attr2):
-        print 'I got you! *.*'
+        # print 'I got you! *.*'
         t = attr1[-1]
         self.sideConnection += 1
         if t > 5:
             return
+        frame = int(attr1[0])
         x1, y1, w1, h1 = float(attr1[2]), float(attr1[3]), float(attr1[4]), float(attr1[5])
         x2, y2, w2, h2 = float(attr2[2]), float(attr2[3]), float(attr2[4]), float(attr2[5])
 
@@ -212,10 +218,12 @@ class GN():
         h_delta = (h2-h1)/t
 
         for i in xrange(1, t):
+            frame += 1
             x1 += x_delta
             y1 += y_delta
             w1 += w_delta
             h1 += h_delta
+            attr1[0] = str(frame)
             attr1[2] = str(x1)
             attr1[3] = str(y1)
             attr1[4] = str(w1)
@@ -311,14 +319,15 @@ class GN():
                     continue
                 id = id_con[self.cur][i]
                 id_con[self.nxt][j] = id
-                attrs = line_con[self.nxt][j]
+                attr1 = line_con[self.cur][i]
+                attr2 = line_con[self.nxt][j]
                 # print attrs
-                attrs[1] = str(id)
-                if attrs[-1] > 1:
+                attr2[1] = str(id)
+                if attr1[-1] > 1:
                     # for the missing detections
-                    self.linearModel(out, line_con[self.cur][i], attrs)
+                    self.linearModel(out, attr1, attr2)
                 line = ''
-                for attr in attrs[:-1]:
+                for attr in attr2[:-1]:
                     line += attr + ','
                 line = line[:-1]
                 print >> out, line
@@ -341,7 +350,7 @@ class GN():
                 while i != index:
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
-                    if attrs[-1] >= gap:
+                    if attrs[-1] <= gap:
                         attrs[-1] += 1
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
@@ -380,12 +389,12 @@ if __name__ == '__main__':
         if not os.path.exists(metric_dir):
             os.mkdir(metric_dir)
 
-        for i in xrange(1,7):
+        for i in xrange(1):
             seq_index = seqs[i]
-            # tts = []
-            tts = [tt for tt in xrange(100, 600, 100)]
+            tts = []
+            # tts = [tt for tt in xrange(100, 600, 100)]
             length = lengths[i]
-            # tts.append(length)
+            tts.append(length)
 
             # metrics_dir = metric_dir+'%02d.txt'%seq_index
             # motmetrics = open(metrics_dir, 'w')
