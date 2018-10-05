@@ -1,4 +1,4 @@
-import time
+import time, os
 import torch.nn as nn
 import torch.optim as optim
 import torch, torchvision
@@ -20,13 +20,13 @@ class appearance(nn.Module):
 
 
 class finetuning():
-    def __init__(self, cuda=False):
+    def __init__(self, cuda=True):
         self.device = torch.device('cuda' if cuda else 'cpu')
         self.nEpochs = 10
         self.numWorker = 4
         self.batchsize = 8
         self.loadModel()
-        self.optimizer = optim.Adam(self.Appearance.parameters(), lr=5e-4)
+        self.optimizer = optim.Adam(self.Appearance.parameters(), lr=1e-5)
         self.train_set = DatasetFromFolder()
         self.data_loader = DataLoader(dataset=self.train_set, num_workers=self.numWorker, batch_size=self.batchsize,
                                  shuffle=True)
@@ -50,14 +50,12 @@ class finetuning():
         self.writer.close()
 
         print 'Saving the Appearance model...'
-        self.Appearance.eval()
         torch.save(self.Appearance, 'Fine-tune/appearance_%02d.pth'%epoch)
-        self.Appearance.train()
 
     def finetune(self):
         step = 0
         head = time.time()
-        for epoch in xrange(1, self.nEpochs):
+        for epoch in xrange(0, self.nEpochs):
             self.writer = SummaryWriter()
             start = time.time()
             num = 0
@@ -91,7 +89,7 @@ class finetuning():
 
                 num += self.batchsize
                 step += 1
-                break
+                # break
 
             print ' Time consuming:', time.time()-start
             epoch_loss /= num
@@ -100,6 +98,9 @@ class finetuning():
 
         print 'Time consuming:', time.time() - head
 try:
+    if not os.path.exists('Fine-tune/'):
+        os.mkdir('Fine-tune/')
+
     ft = finetuning()
     print '     Finetuning...'
     ft.finetune()

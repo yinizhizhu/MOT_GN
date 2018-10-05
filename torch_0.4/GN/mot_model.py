@@ -1,10 +1,21 @@
-import torch
+import torch, torchvision
 import torch.nn as nn
 from global_set import criterion_s, u_s, e_s
 
 v_num = 512  # Only take the appearance into consideration, and add velocity when basic model works
 u_num = 100
 e_num = 1 if criterion_s else 2
+
+
+class appearance(nn.Module):
+    def __init__(self):
+        super(appearance, self).__init__()
+        features = list(torchvision.models.resnet34(pretrained=True).children())[:-1]
+        # print features
+        self.features = nn.Sequential(*features)
+
+    def forward(self, x):
+        return self.features(x)
 
 
 class uphi(nn.Module):
