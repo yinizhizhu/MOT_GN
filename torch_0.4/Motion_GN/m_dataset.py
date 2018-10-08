@@ -1,11 +1,8 @@
 import torch.utils.data as data
-import torchvision, cv2, random, torch, shutil, os
-import torch.nn as nn
-import numpy as np
+import random, torch, shutil, os
 from PIL import Image
 import torch.nn.functional as F
 from m_global_set import edge_initial
-from torchvision.transforms import ToTensor
 
 
 def load_img(filepath):
@@ -27,6 +24,7 @@ class DatasetFromFolder(data.Dataset):
         self.getSeqL()
         self.readBBx()
         self.initBuffer()
+        print '     Data loader is already!'
 
     def cleanPath(self, part):
         if os.path.exists(part+'/gts/'):
@@ -49,6 +47,9 @@ class DatasetFromFolder(data.Dataset):
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
+        imgs = [None for i in xrange(self.seqL + 1)]
+        for i in xrange(1, self.seqL+1):
+            imgs[i] = load_img(self.img_dir+'%06d.jpg'%i)
         gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
         pre = -1
@@ -66,7 +67,10 @@ class DatasetFromFolder(data.Dataset):
                     continue
 
                 pre = id
-                self.bbx[index].append([x, y, w, h, id, vr])
+                img = imgs[i]
+                x, y, w, h = self.fixBB(x, y, w, h, img.size)
+                width, height = float(img.size[0]), float(img.size[1])
+                self.bbx[index].append([x/width, y/height, w/width, h/height, id, vr])
         f.close()
 
     def initBuffer(self):
@@ -146,13 +150,17 @@ class DatasetFromFolder(data.Dataset):
         print '     The set is empty!'
         return None
 
-    def getApp(self, tag, index):
+    def getMotion(self, tag, index, pre_index=None):
         cur = self.cur if tag else self.nxt
         if torch.is_tensor(index):
             n = index.numel()
             if n < 0:
                 print 'The tensor is empyt!'
                 return None
+            if tag == 0:
+                for k in xrange(n):
+                    i, j = pre_index[k].item(), index[k].item()
+                    self.updateVelocity(i, j)
             if n == 1:
                 return self.detections[cur][index[0]][0]
             ans = torch.cat((self.detections[cur][index[0]][0], self.detections[cur][index[1]][0]), dim=0)
@@ -162,6 +170,7 @@ class DatasetFromFolder(data.Dataset):
         return self.detections[cur][index][0]
 
     def swapFC(self):
+        self.getVelocity()
         self.cur = self.cur ^ self.nxt
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
@@ -181,10 +190,9 @@ class DatasetFromFolder(data.Dataset):
         '''
         Getting the appearance of the detections in current frame
         :param tag: 1 - initiating
-        :param show: 1 - show the cropped & src image
         :return: None
         '''
-        apps = []
+        motions = []
         with torch.no_grad():
             bbx_container = []
             for bbx in self.bbx[self.f_step]:
@@ -192,31 +200,44 @@ class DatasetFromFolder(data.Dataset):
                 Condition needed be taken into consideration:
                     x, y < 0 and x+w > W, y+h > H
                 """
-                img = load_img(self.img_dir+'%06d.jpg'%self.f_step)  # initial with loading the first frame
                 x, y, w, h, id, vr = bbx
-                x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 bbx_container.append([x, y, w, h, id, vr])
                 x += w/2
                 y += h/2
-                v_x, v_y = self.getV(x, y, id)
-                apps.append([torch.FloatTensor([[x, y, w, h, v_x, v_y]]), vr])
+                # v_x, v_y = self.getV(x, y, id)
+                motions.append([torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]), id])
 
             self.bbx[self.f_step] = bbx_container
         if tag:
-            self.detections[self.cur] = apps
+            self.detections[self.cur] = motions
         else:
-            self.detections[self.nxt] = apps
+            self.detections[self.nxt] = motions
+
+    def updateVelocity(self, i, j):
+        x1, y1, w1, h1, id1, vr1 = self.bbx[self.f_step-1][i]
+        x2, y2, w2, h2, id2, vr2 = self.bbx[self.f_step][j]
+        v_x = x2+w2/2 - (x1+w1/2)
+        v_y = y2+h2/2 - (y1+h1/2)
+        self.detections[self.nxt][j][0][0][4] = v_x
+        self.detections[self.nxt][j][0][0][5] = v_y
+
+    def getVelocity(self):
+        for (i, j) in self.matches:
+            self.updateVelocity(i, j)
 
     def initEC(self):
         self.m = len(self.detections[self.cur])
         self.n = len(self.detections[self.nxt])
         self.candidates = []
         self.edges = self.getMN(self.m, self.n)
+        self.matches = []
         self.gts = [[None for j in xrange(self.n)] for i in xrange(self.m)]
         self.step_gt = 0.0
         for i in xrange(self.m):
             for j in xrange(self.n):
                 tag = int(self.detections[self.cur][i][1] == self.detections[self.nxt][j][1])
+                if tag:
+                    self.matches.append((i, j))
                 self.gts[i][j] = torch.LongTensor([tag])
                 self.step_gt += tag*1.0
 
