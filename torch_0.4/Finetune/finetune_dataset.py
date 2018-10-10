@@ -1,4 +1,4 @@
-import random, time, cv2, torch
+import random, time, cv2
 from torchvision.transforms import ToTensor
 import numpy as np
 from math import *
@@ -11,14 +11,16 @@ def load_img(filepath):
     img = Image.open(filepath).convert('RGB')
     return img
 
+overlap = 0.85
 p_tag = 0  # 1 - nearby, 0 - no limitation
 
 
 class DatasetFromFolder(data.Dataset):
-    def __init__(self):
+    def __init__(self, tag):
         super(DatasetFromFolder, self).__init__()
         basic_dir = 'MOT16/train/MOT16-'
         parts = ['02', '04', '05', '09', '10', '11', '13']
+        self.negative_tag = tag  # 1 - hard mining, 0 - random
         self.candidates = []
         self.counter = 0
 
@@ -135,6 +137,10 @@ class DatasetFromFolder(data.Dataset):
             print container
         return self.look_up[index][i]
 
+    def negative_random(self, id):
+        step = random.randint(0, len(self.bbx[id])-1)
+        return self.bbx[id][step]
+
     def readImg(self):
         self.imgs = [None]
         for i in xrange(1, self.seqL+1):
@@ -155,7 +161,10 @@ class DatasetFromFolder(data.Dataset):
         if index is None:
             x, y, w, h, index = bbx
         else:
-            x, y, w, h = bbx
+            if self.negative_tag:
+                x, y, w, h = bbx
+            else:
+                x, y, w, h, index = bbx
         img = self.imgs[index]
         x, y, w, h = self.fixBB(x, y, w, h, img.size)
         crop = img.crop([x, y, x + w, y + h])
@@ -163,6 +172,35 @@ class DatasetFromFolder(data.Dataset):
         bbx = ToTensor()(patch)
         # bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
         return bbx
+
+    def generator(self, bbx, index=None):
+        n = len(bbx)
+        if n == 5:
+            x, y, w, h, index = bbx
+        else:
+            x, y, w, h = bbx
+        x, y, w = float(x), float(y), float(w),
+        tmp = overlap*2/(2+overlap)
+        n_w = random.uniform(tmp*w, w)
+        n_h = tmp*w*float(h)/n_w
+
+        direction = random.randint(1, 4)
+        if direction == 1:
+            x = x + n_w - w
+            y = y + n_h - h
+        elif direction == 2:
+            x = x - n_w + w
+            y = y + n_h - h
+        elif direction == 3:
+            x = x + n_w - w
+            y = y - n_h + h
+        else:
+            x = x - n_w + w
+            y = y - n_h + h
+        ans = [int(x), int(y), int(w), h]
+        if n == 5:
+            ans.append(index)
+        return ans
 
     def sampleCollection(self, show=0):
         if show:
@@ -185,14 +223,21 @@ class DatasetFromFolder(data.Dataset):
 
         for i in xrange(counter):
             step = 0
-            while step < 30:
+            while step < 10:
                 index = container[i]
                 positive, negative = None, None
                 while positive is None or negative is None:
                     a_index = random.randint(0, len(self.bbx[index])-1)
                     anchor = self.bbx[index][a_index]
                     positive = self.positive(index, a_index)
-                    negative = self.negative(anchor, index)
+                    if self.negative_tag:
+                        negative = self.negative(anchor, index)
+                    else:
+                        j = i
+                        while j == i:
+                            j = random.randint(0, counter - 1)
+                        id = container[j]
+                        negative = self.negative_random(id)
 
                 a = self.cropPatch(anchor)
                 p = self.cropPatch(positive)
@@ -208,6 +253,15 @@ class DatasetFromFolder(data.Dataset):
                     # raw_input('Continue?')
                 self.candidates.append([a, p, n])
                 step += 1
+                for j in xrange(9):
+                    tmpA = self.generator(anchor)
+                    tmpP = self.generator(positive)
+                    tmpN = self.generator(negative)
+                    a = self.cropPatch(tmpA)
+                    p = self.cropPatch(tmpP)
+                    n = self.cropPatch(tmpN, index)
+                    self.candidates.append([a, p, n])
+                    step += 1
 
         # free up the space
         self.imgs = []
