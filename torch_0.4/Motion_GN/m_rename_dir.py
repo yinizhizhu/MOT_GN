@@ -12,7 +12,7 @@ t_dir = ''  # the dir of the final level
 seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
 lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
 
-target = 'test_9_all_fixed_dis'  # inner, cross, gts
+target = '20'  # inner, cross, gts
 
 type_dir = 'IoU' if edge_initial == 0 else 'Random'
 

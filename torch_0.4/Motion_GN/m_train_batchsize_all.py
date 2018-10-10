@@ -22,7 +22,7 @@ def deleteDir(del_dir):
 
 
 class GN():
-    def __init__(self, lr=5e-3, batchs=8, cuda=True):
+    def __init__(self, lr=5e-4, batchs=8, cuda=True):
         '''
         :param tt: train_test
         :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
@@ -91,7 +91,7 @@ class GN():
         self.writer.add_graph(self.Ephi, (E, V1, V2, u))
 
     def log(self, t_data):
-        out = open(self.outName, 'w')
+        out = open(self.outName, 'a')
         print >> out, self.criterion
         print >> out, 'lr:{}'.format(self.lr)
         print >> out, self.optimizer.state_dict()
@@ -219,7 +219,7 @@ class GN():
             e, gt, vs_index, vr_index = edge
             e = e.to(self.device).view(1,-1)
             v1 = self.train_set.getMotion(1, vs_index).to(self.device)
-            v2 = self.train_set.getMotion(0, vr_index).to(self.device)
+            v2 = self.train_set.getMotion(0, vr_index, vs_index).to(self.device)
             e_ = self.Ephi(e, v1, v2, u_)
             self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
 
@@ -265,7 +265,7 @@ class GN():
                 e, gt, vs_index, vr_index = edge
                 e = e.to(self.device).view(1,-1)
                 v1 = self.train_set.getMotion(1, vs_index).to(self.device)
-                v2 = self.train_set.getMotion(0, vr_index).to(self.device)
+                v2 = self.train_set.getMotion(0, vr_index, vs_index).to(self.device)
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
