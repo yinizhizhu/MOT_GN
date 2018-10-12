@@ -1,28 +1,32 @@
-import random, time, cv2
+import random, time, cv2, gc
 from torchvision.transforms import ToTensor
 import numpy as np
 from math import *
 from PIL import Image
 import torch.utils.data as data
-from global_set import tau_vr, tau_frame
+from global_set import tau_vr, tau_frame, overlap
 
 
 def load_img(filepath):
     img = Image.open(filepath).convert('RGB')
     return img
 
-overlap = 0.85
 p_tag = 0  # 1 - nearby, 0 - no limitation
 
 
 class DatasetFromFolder(data.Dataset):
-    def __init__(self, tag):
+    def __init__(self, tag, show=0):
         super(DatasetFromFolder, self).__init__()
         basic_dir = 'MOT16/train/MOT16-'
         parts = ['02', '04', '05', '09', '10', '11', '13']
         self.negative_tag = tag  # 1 - hard mining, 0 - random
         self.candidates = []
         self.counter = 0
+        self.show = show
+        if show:
+            cv2.namedWindow('anchor', flags=0)
+            cv2.namedWindow('positive', flags=0)
+            cv2.namedWindow('negative', flags=0)
 
         start = time.time()
         for part in parts:
@@ -157,7 +161,7 @@ class DatasetFromFolder(data.Dataset):
         h -= y
         return x, y, w, h
 
-    def cropPatch(self, bbx, index=None):
+    def cropPatch(self, bbx, l, index=None):
         if index is None:
             x, y, w, h, index = bbx
         else:
@@ -168,6 +172,8 @@ class DatasetFromFolder(data.Dataset):
         img = self.imgs[index]
         x, y, w, h = self.fixBB(x, y, w, h, img.size)
         crop = img.crop([x, y, x + w, y + h])
+        if self.show:
+            self.showCrop(crop, l)
         patch = crop.resize((224, 224), Image.ANTIALIAS)
         bbx = ToTensor()(patch)
         # bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
@@ -180,7 +186,7 @@ class DatasetFromFolder(data.Dataset):
         else:
             x, y, w, h = bbx
         x, y, w = float(x), float(y), float(w),
-        tmp = overlap*2/(2+overlap)
+        tmp = overlap*2/(1+overlap)
         n_w = random.uniform(tmp*w, w)
         n_h = tmp*w*float(h)/n_w
 
@@ -202,11 +208,17 @@ class DatasetFromFolder(data.Dataset):
             ans.append(index)
         return ans
 
-    def sampleCollection(self, show=0):
-        if show:
-            cv2.namedWindow('anchor', flags=0)
-            cv2.namedWindow('positive', flags=0)
-            cv2.namedWindow('negative', flags=0)
+    def showCrop(self, a, index):
+        img = np.asarray(a)
+        if index == 1:
+            cv2.imshow('anchor', img)
+        elif index == 2:
+            cv2.imshow('positive', img)
+        else:
+            cv2.imshow('negative', img)
+            cv2.waitKey(300)
+
+    def sampleCollection(self):
         f = open('Fine-tune/finetune.txt', 'a')
         print >> f, self.gt_dir
         counter = 0
@@ -239,37 +251,48 @@ class DatasetFromFolder(data.Dataset):
                         id = container[j]
                         negative = self.negative_random(id)
 
-                a = self.cropPatch(anchor)
-                p = self.cropPatch(positive)
-                n = self.cropPatch(negative, index)
-                if show:
-                    img = np.asarray(a)
-                    cv2.imshow('anchor', img)
-                    crop1 = np.asarray(p)
-                    cv2.imshow('positive', crop1)
-                    crop2 = np.asarray(n)
-                    cv2.imshow('negative', crop2)
-                    cv2.waitKey(300)
-                    # raw_input('Continue?')
+                a = self.cropPatch(anchor, 1)
+                p = self.cropPatch(positive, 2)
+                n = self.cropPatch(negative, 3, index)
                 self.candidates.append([a, p, n])
-                step += 1
-                for j in xrange(9):
+                for j in xrange(5):
                     tmpA = self.generator(anchor)
                     tmpP = self.generator(positive)
                     tmpN = self.generator(negative)
-                    a = self.cropPatch(tmpA)
-                    p = self.cropPatch(tmpP)
-                    n = self.cropPatch(tmpN, index)
+                    a = self.cropPatch(tmpA, 1)
+                    p = self.cropPatch(tmpP, 2)
+                    n = self.cropPatch(tmpN, 3, index)
                     self.candidates.append([a, p, n])
-                    step += 1
-
-        # free up the space
-        self.imgs = []
-        self.bbx = []
-        self.look_up = []
+                step += 1
 
     def __getitem__(self, index):
         return self.candidates[index]
 
     def __len__(self):
         return len(self.candidates)
+
+
+# from torch.utils.data import DataLoader
+# from sys import getrefcount
+#
+# test = DatasetFromFolder(0)
+# data_loader = DataLoader(dataset=test, num_workers=4, batch_size=8, shuffle=True)
+#
+# raw_input('Data is ready!')
+#
+# del data_loader
+# del test
+# gc.collect()
+#
+# raw_input('Clean the data!')
+#
+# test = DatasetFromFolder(1)
+# data_loader = DataLoader(dataset=test, num_workers=4, batch_size=8, shuffle=True)
+#
+# raw_input('We get this?')
+#
+# del data_loader
+# del test
+# gc.collect()
+#
+# raw_input('Free the space!')

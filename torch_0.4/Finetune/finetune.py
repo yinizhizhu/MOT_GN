@@ -1,4 +1,4 @@
-import time, os
+import time, os, gc
 import torch.nn as nn
 import torch.optim as optim
 import torch, torchvision
@@ -6,6 +6,8 @@ from torch.utils.data import DataLoader
 from finetune_dataset import DatasetFromFolder
 
 from tensorboardX import SummaryWriter
+
+state_tag = 1  # 0 - random, 1 - hard mining
 
 
 class appearance(nn.Module):
@@ -22,27 +24,36 @@ class appearance(nn.Module):
 class finetuning():
     def __init__(self, cuda=True):
         self.device = torch.device('cuda' if cuda else 'cpu')
-        self.nEpochs = 20
         self.numWorker = 4
         self.batchsize = 8
         self.loadModel()
         self.optimizer = optim.Adam(self.Appearance.parameters(), lr=1e-5)
-        self.train_set = DatasetFromFolder(0)
+        if state_tag:
+            self.train_set = DatasetFromFolder(1)
+        else:
+            self.train_set = DatasetFromFolder(0)
+        print '     The length of the training set:', len(self.train_set)
         self.data_loader = DataLoader(dataset=self.train_set, num_workers=self.numWorker, batch_size=self.batchsize,
                                  shuffle=True)
 
     def loadModel(self):
-        self.Appearance = appearance()
+        if state_tag:
+            self.Appearance = torch.load('Fine-tune/appearance_09.pth')
+        else:
+            self.Appearance = appearance()
         self.Appearance.to(self.device)
         self.Appearance.train()  # Training model
 
-        f = open('Fine-tune/finetune.txt', 'w')
+        if state_tag:
+            f = open('Fine-tune/finetune.txt', 'a')
+        else:
+            f = open('Fine-tune/finetune.txt', 'w')
         print >> f, self.Appearance
         f.close()
 
     def mse(self, a, b):
         c = a - b
-        ret = torch.mean(c*c)
+        ret = torch.sum(c*c)
         return torch.sqrt(ret)
 
     def saveModel(self, epoch):
@@ -99,10 +110,15 @@ class finetuning():
         print 'Time consuming:', time.time() - head
 
     def finetune_3(self):
-        tag = 1
         step = 0
         head = time.time()
-        for epoch in xrange(0, self.nEpochs):
+        if state_tag:
+            index_h = 10
+            index_t = 20
+        else:
+            index_h = 0
+            index_t = 10
+        for epoch in xrange(index_h, index_t):
             self.writer = SummaryWriter()
             start = time.time()
             num = 0
@@ -145,12 +161,6 @@ class finetuning():
             epoch_loss /= num
             self.writer.add_scalars('Epoch_loss', {'Loss': epoch_loss}, epoch)
             self.saveModel(epoch)
-            if epoch > 9 and tag:
-                tag = 0
-                self.train_set = DatasetFromFolder(1)
-                self.data_loader = DataLoader(dataset=self.train_set, num_workers=self.numWorker,
-                                              batch_size=self.batchsize,
-                                              shuffle=True)
 
         print 'Time consuming:', time.time() - head
 try:
