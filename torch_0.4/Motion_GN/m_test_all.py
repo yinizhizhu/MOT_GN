@@ -3,7 +3,7 @@ import numpy as np
 from m_mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil
+import time, os, shutil, gc
 from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
 from m_test_dataset import DatasetFromFolder
 
@@ -37,6 +37,7 @@ class GN():
         :param length: the number of frames which is used for training
         :param cuda: True - GPU, False - CPU
         '''
+        self.bbx_counter = 0
         self.seq_index = seq_index
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
@@ -159,6 +160,7 @@ class GN():
             else:
                 line = line[:-1]
             print >> out, line
+            self.bbx_counter += 1
         self.missingCounter += t-1
 
     def evaluation(self, head, tail, gtFile, outFile):
@@ -178,7 +180,8 @@ class GN():
 
         step = head + self.train_set.setBuffer(head)
         while step < tail:
-            step += self.train_set.loadNext()
+            t_gap = self.train_set.loadNext()
+            step += t_gap
             # print head+step, 'F',
 
             u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
@@ -206,6 +209,7 @@ class GN():
                         else:
                             line = line[:-1]
                         print >> out, line
+                        self.bbx_counter += 1
                         line_con[self.cur].append(attrs)
                         id_con[self.cur].append(id_step)
                         id_step += 1
@@ -230,7 +234,7 @@ class GN():
                     continue
                 e = e.to(self.device).view(1,-1)
                 v1 = self.train_set.getMotion(1, vs_index).to(self.device)
-                v2 = self.train_set.getMotion(0, vr_index, vs_index).to(self.device)
+                v2 = self.train_set.getMotion(0, vr_index, vs_index, line_con[self.cur][vs_index][-1]).to(self.device)
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -244,10 +248,14 @@ class GN():
             results = self.hungarian.compute(ret)
 
             out = open(outFile, 'a')
+            look_up = set(j for j in xrange(n))
             for (i, j) in results:
                 # print (i,j)
                 if ret[i][j] >= tau_threshold:
                     continue
+                look_up.remove(j)
+                self.train_set.updateVelocity(i, j, line_con[self.cur][i][-1])
+
                 id = id_con[self.cur][i]
                 id_con[self.nxt][j] = id
                 attr1 = line_con[self.cur][i]
@@ -265,6 +273,10 @@ class GN():
                 else:
                     line = line[:-1]
                 print >> out, line
+                self.bbx_counter += 1
+
+            for j in look_up:
+                self.train_set.updateVelocity(-1, j)
 
             for i in xrange(n):
                 if id_con[self.nxt][i] == -1:
@@ -279,18 +291,18 @@ class GN():
                     else:
                         line = line[:-1]
                     print >> out, line
+                    self.bbx_counter += 1
                     id_step += 1
             out.close()
 
-            self.train_set.getVelocity(results)
-
+            # For missing & Occlusion
             index = 0
             for (i, j) in results:
                 while i != index:
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
-                    if attrs[-1] <= gap:
-                        attrs[-1] += 1
+                    if attrs[-1] + t_gap <= gap:
+                        attrs[-1] += t_gap
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.train_set.moveMotion(index)
@@ -299,12 +311,18 @@ class GN():
             while index < m:
                 attrs = line_con[self.cur][index]
                 # print '*', attrs, '*'
-                if attrs[-1] <= gap:
-                    attrs[-1] += 1
+                if attrs[-1] + t_gap <= gap:
+                    attrs[-1] += t_gap
                     line_con[self.nxt].append(attrs)
                     id_con[self.nxt].append(id_con[self.cur][index])
                     self.train_set.moveMotion(index)
                 index += 1
+
+            # con = self.train_set.cleanEdge()
+            # for i in xrange(len(con)-1, -1, -1):
+            #     index = con[i]
+            #     del line_con[self.nxt][index]
+            #     del id_con[self.nxt][index]
 
             line_con[self.cur] = []
             id_con[self.cur] = []
@@ -312,6 +330,7 @@ class GN():
             self.train_set.swapFC()
             self.swapFC()
         gtIn.close()
+        print '     The results:', id_step, self.bbx_counter
 
         # tra_tst = 'training sets' if head == 1 else 'validation sets'
         # out = open(outFile, 'a')

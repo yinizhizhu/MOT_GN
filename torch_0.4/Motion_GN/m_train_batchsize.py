@@ -11,10 +11,24 @@ from m_global_set import edge_initial, u_initial
 
 from tensorboardX import SummaryWriter
 
+# from pycrayon import CrayonClient
+# curveName = list()
+# curveName.append('regular_loss')
+# curveName.append('penalized_loss')
+# curveName.append('epoch_num')
+#
+# cc = CrayonClient(hostname="localhost", port=8889)
+#
+# exper = list()
+# for name in curveName:
+#     cc.remove_experiment(name)
+    # exper.append(cc.create_experiment(name))
+
 torch.manual_seed(123)
 np.random.seed(123)
 
 t_dir = ''  # the dir of the final level
+sequence_dir = ''  # the dir of the training dataset
 
 
 def deleteDir(del_dir):
@@ -22,7 +36,7 @@ def deleteDir(del_dir):
 
 
 class GN():
-    def __init__(self, lr=5e-4, batchs=8, cuda=True):
+    def __init__(self, tt, tag, lr=5e-3, batchs=8, cuda=True):
         '''
         :param tt: train_test
         :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
@@ -31,15 +45,26 @@ class GN():
         :param cuda:
         '''
         # all the tensor should set the 'volatile' as True, and False when update the network
+        self.writer = SummaryWriter()
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
         self.nEpochs = 999
         self.lr = lr
         self.batchsize = batchs
         self.numWorker = 4
+        self.outName = t_dir+'result.txt'
 
         self.show_process = 0   # interaction
         self.step_input = 1
+
+        # print '     Loading Data...'
+        start = time.time()
+        self.train_set = DatasetFromFolder(sequence_dir, self.outName)
+        t_data = time.time() - start
+
+        self.train_test = tt
+        self.tag = tag
+        self.loss_threhold = 0.03
 
         print '     Preparing the model...'
         self.resetU()
@@ -55,27 +80,21 @@ class GN():
             {'params': self.Ephi.parameters()}],
             lr=lr)
 
-        seqs = [2, 4, 5, 9, 10, 11, 13]
-        lengths = [600, 1050, 837, 525, 654, 900, 750]
+        print '     Logging...'
+        self.log(t_data)
 
-        for i in xrange(7):
-            self.writer = SummaryWriter()
-            # print '     Loading Data...'
-            seq = seqs[i]
-            self.seq_index = seq
-            start = time.time()
-            sequence_dir = '../MOT/MOT16/train/MOT16-%02d'%seq
-            self.outName = t_dir+'result_%02d.txt'%seq
-            self.train_set = DatasetFromFolder(sequence_dir, self.outName)
-
-            self.train_test = lengths[i]
-            self.tag = 0
-            self.loss_threhold = 0.03
-            self.update()
-
-            print '     Logging...'
-            t_data = time.time() - start
-            self.log(t_data)
+    def getEdges(self):  # the statistic data of the graph among two frames' detections
+        self.train_set.setBuffer(1)
+        step = 1
+        edge_counter = 0.0
+        for head in xrange(1, self.train_test):
+            self.train_set.loadNext()  # Get the next frame
+            edge_counter += self.train_set.m * self.train_set.n
+            step += 1
+            self.train_set.swapFC()
+        out = open(self.outName, 'a')
+        print >> out, 'Average edge:', edge_counter*1.0/step
+        out.close()
 
     def showNetwork(self):
         # add the graph into tensorboard
@@ -118,7 +137,7 @@ class GN():
             edge_counter += self.train_set.m * self.train_set.n
             start = time.time()
             show_name = 'LOSS_{}'.format(step)
-            # print '         Step -', step
+            print '         Step -', step
             data_loader = DataLoader(dataset=self.train_set, num_workers=self.numWorker, batch_size=self.batchsize, shuffle=True)
             for epoch in xrange(1, self.nEpochs):
                 num = 0
@@ -135,8 +154,8 @@ class GN():
                     self.optimizer.zero_grad()
 
                     u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
-                    v1 = self.train_set.getApp(1, vs_index).to(self.device)
-                    v2 = self.train_set.getApp(0, vr_index, vs_index).to(self.device)
+                    v1 = self.train_set.getApp(1, vs_index)
+                    v2 = self.train_set.getApp(0, vr_index)
                     e_ = self.Ephi(e, v1, v2, u_)
 
                     if self.show_process:
@@ -180,18 +199,21 @@ class GN():
                         self.step_input = 0
 
                 epoch_loss /= num
-                # print '         Loss of epoch {}: {}.'.format(epoch, epoch_loss)
+                print '         Loss of epoch {}: {}.'.format(epoch, epoch_loss)
                 self.writer.add_scalars(show_name, {'regular': epoch_loss,
                                                'u': arpha_loss/num*self.batchsize}, epoch)
+                # exper[0].add_scalar_value(show_name, epoch_loss, epoch)
+                # exper[1].add_scalar_value(show_name, arpha_loss, epoch)
                 if epoch_loss < self.loss_threhold:
                     break
 
-            # print '         Time consuming:{}\n\n'.format(time.time()-start)
+            print '         Time consuming:{}\n\n'.format(time.time()-start)
             self.updateUE()
             self.train_set.showE()
             self.showU()
             average_epoch += epoch
             self.writer.add_scalar('epoch', epoch, step)
+            # exper[2].add_scalar_value('epoch', epoch, step)
             step += 1
             self.train_set.swapFC()
         out = open(self.outName, 'a')
@@ -202,11 +224,11 @@ class GN():
 
     def saveModel(self):
         print 'Saving the Uphi model...'
-        torch.save(self.Uphi, t_dir+'uphi_%02d.pth'%self.seq_index)
+        torch.save(self.Uphi, t_dir+'uphi.pth')
         print 'Saving the Ephi model...'
-        torch.save(self.Ephi, t_dir+'ephi_%02d.pth'%self.seq_index)
+        torch.save(self.Ephi, t_dir+'ephi.pth')
         print 'Saving the global variable u...'
-        torch.save(self.u, t_dir+'u_%02d.pth'%self.seq_index)
+        torch.save(self.u, t_dir+'u.pth')
         print 'Done!'
 
     def updateUE(self):
@@ -218,8 +240,8 @@ class GN():
         for edge in self.train_set:
             e, gt, vs_index, vr_index = edge
             e = e.to(self.device).view(1,-1)
-            v1 = self.train_set.getApp(1, vs_index).to(self.device)
-            v2 = self.train_set.getApp(0, vr_index).to(self.device)
+            v1 = self.train_set.getApp(1, vs_index)
+            v2 = self.train_set.getApp(0, vr_index)
             e_ = self.Ephi(e, v1, v2, u_)
             self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
 
@@ -239,7 +261,7 @@ class GN():
         self.outputScalars()
 
     def outputScalars(self):
-        self.writer.export_scalars_to_json(t_dir + 'scalars_%02d.json'%self.seq_index)
+        self.writer.export_scalars_to_json(t_dir + 'scalars.json')
         self.writer.close()
 
     def evaluation(self, head):
@@ -248,11 +270,11 @@ class GN():
         total_ed = 0.0
         for step in xrange(1, self.train_test):
             self.train_set.loadNext()
-            # print head+step, 'F',
+            print head+step, 'F',
 
             u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
 
-            # print 'Fo'
+            print 'Fo'
             m = self.train_set.m
             n = self.train_set.n
             ret = [[0.0 for i in xrange(n)] for j in xrange(m)]
@@ -260,12 +282,12 @@ class GN():
             total_gt += step_gt
 
             # update the edges
-            # print 'T',
+            print 'T',
             for edge in self.train_set.candidates:
                 e, gt, vs_index, vr_index = edge
                 e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getApp(1, vs_index).to(self.device)
-                v2 = self.train_set.getApp(0, vr_index).to(self.device)
+                v1 = self.train_set.getApp(1, vs_index)
+                v2 = self.train_set.getApp(0, vr_index)
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -275,21 +297,21 @@ class GN():
             self.train_set.showE()
             self.showU()
 
-            # for j in ret:
-            #     print j
+            for j in ret:
+                print j
             results = self.hungarian.compute(ret)
-            # print head+step, results,
+            print head+step, results,
             step_ed = 0.0
             for (j, k) in results:
                 step_ed += self.train_set.gts[j][k].numpy()[0]
             total_ed += step_ed
 
-            # print 'Fi'
-            # print 'Step ACC:{}/{}({}%)'.format(int(step_ed), int(step_gt), step_ed/step_gt*100)
+            print 'Fi'
+            print 'Step ACC:{}/{}({}%)'.format(int(step_ed), int(step_gt), step_ed/step_gt*100)
             self.train_set.swapFC()
 
         tra_tst = 'training sets' if head == 1 else 'testing sets'
-        # print 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
+        print 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
         out = open(self.outName, 'a')
         print >> out, 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
         out.close()
@@ -303,8 +325,6 @@ class GN():
 
 if __name__ == '__main__':
     try:
-        if not os.path.exists('Results/'):
-            os.mkdir('Results/')
         year = 16
         f_dir = 'Results/MOT%s/' % year
         if not os.path.exists(f_dir):
@@ -318,15 +338,39 @@ if __name__ == '__main__':
         if not os.path.exists(f_dir):
             os.mkdir(f_dir)
 
+        # seqs = [2, 4, 5, 9, 10, 11, 13]
+        # lengths = [600, 1050, 837, 525, 654, 900, 750]
+        seqs = [10, 11, 13]
+        lengths = [654, 900, 750]
+        for i in xrange(3):
+            seq_index = seqs[i]
+            tts = [tt for tt in xrange(100, 600, 100)]
+            length = lengths[i]
+            tts.append(length)
+            for tt in tts:
+                tag = 1
+                if tt*2 > length:
+                    if tt == length:
+                        tag = 0
+                    else:
+                        continue
 
-        t_dir = f_dir + 'all_m_app/'
-        if not os.path.exists(t_dir):
-            os.mkdir(t_dir)
+                s_dir = f_dir + '%02d/' % seq_index
+                if not os.path.exists(s_dir):
+                    os.mkdir(s_dir)
 
-        start = time.time()
-        print '     Starting Graph Network...'
-        gn = GN()
-        print 'Time consuming:', time.time()-start
+                t_dir = s_dir + '%d/' % tt
+                if not os.path.exists(t_dir):
+                    os.mkdir(t_dir)
+
+                seq_dir = 'MOT%d-%02d' % (year, seq_index)
+                sequence_dir = 'MOT16/train/' + seq_dir
+                print sequence_dir
+
+                start = time.time()
+                gn = GN(tt, tag)
+                print '     Starting Graph Network...'
+                gn.update()
     except KeyboardInterrupt:
         print 'Time consuming:', time.time()-start
         print ''

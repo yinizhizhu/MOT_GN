@@ -1,5 +1,5 @@
 import torch.utils.data as data
-import random, torch, shutil, os
+import random, torch, shutil, os, gc
 from math import *
 from PIL import Image
 import torch.nn.functional as F
@@ -79,7 +79,7 @@ class DatasetFromFolder(data.Dataset):
         for index in xrange(1, self.seqL+1):
             for bbx in self.bbx[index]:
                 x,y, w, h, id, conf_score, vr = bbx
-                print >> gt_out, '%d,%d,%d,%d,%d,%d,%f,-1,-1,-1'%(index, id, x, y, w, h, conf_score)
+                print >> gt_out, '%d,-1,%d,%d,%d,%d,%f,-1,-1,-1'%(index, x, y, w, h, conf_score)
         gt_out.close()
 
     def readBBx_det(self):
@@ -207,30 +207,32 @@ class DatasetFromFolder(data.Dataset):
                 ret[i][j] = self.distance(bbx1, self.bbx[self.f_step][j])
         return ret
 
-    def getMotion(self, tag, index, pre_index=None):
+    def getMotion(self, tag, index, pre_index=None, t=None):
         cur = self.cur if tag else self.nxt
-        if torch.is_tensor(index):
-            n = index.numel()
-            if n < 0:
-                print 'The tensor is empyt!'
-                return None
-            if tag == 0:
-                for k in xrange(n):
-                    i, j = pre_index[k].item(), index[k].item()
-                    self.updateVelocity(i, j)
-            if n == 1:
-                return self.detections[cur][index[0]][0]
-            ans = torch.cat((self.detections[cur][index[0]][0], self.detections[cur][index[1]][0]), dim=0)
-            for i in xrange(2, n):
-                ans = torch.cat((ans, self.detections[cur][index[i]][0]), dim=0)
-            return ans
         if tag == 0:
-            self.updateVelocity(pre_index, index)
+            self.updateVelocity(pre_index, index, t)
         return self.detections[cur][index][0]
 
     def moveMotion(self, index):
-        self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx
-        self.detections[self.nxt].append(self.detections[self.cur][index])   # add the appearance
+        self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx: x, y, w, h, id, conf_score
+        self.detections[self.nxt].append(self.detections[self.cur][index])   # add the motion: [[x, y, w, h, v_x, v_y], id]
+
+    def cleanEdge(self):
+        con = []
+        index = 0
+        for det in self.detections[self.nxt]:
+            motion, id = det
+            x = motion[0][0].item() + motion[0][4].item()
+            y = motion[0][1].item() + motion[0][5].item()
+            if (x < 0.0 or x > 1.0) or (y < 0.0 or y > 1.0):
+                con.append(index)
+            index += 1
+
+        for i in xrange(len(con)-1, -1, -1):
+            index = con[i]
+            del self.bbx[self.f_step][index]
+            del self.detections[self.nxt][index]
+        return con
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
@@ -261,21 +263,20 @@ class DatasetFromFolder(data.Dataset):
         else:
             self.detections[self.nxt] = motions
 
-    def updateVelocity(self, i, j):
-        if test_gt_det:
-            x1, y1, w1, h1, id1, conf_score1, vr1 = self.bbx[self.f_step-self.gap][i]
-            x2, y2, w2, h2, id2, conf_score2, vr2 = self.bbx[self.f_step][j]
-        else:
-            x1, y1, w1, h1, id1, conf_score1 = self.bbx[self.f_step-self.gap][i]
-            x2, y2, w2, h2, id2, conf_score2 = self.bbx[self.f_step][j]
-        v_x = x2+w2/2 - (x1+w1/2)
-        v_y = y2+h2/2 - (y1+h1/2)
-        self.detections[self.nxt][j][0][0][4] = v_x/self.gap
-        self.detections[self.nxt][j][0][0][5] = v_y/self.gap
-
-    def getVelocity(self, matches):
-        for (i, j) in matches:
-            self.updateVelocity(i, j)
+    def updateVelocity(self, i, j, t=None):
+        v_x = 0.0
+        v_y = 0.0
+        if i != -1:
+            if test_gt_det:
+                x1, y1, w1, h1, id1, conf_score1, vr1 = self.bbx[self.f_step-self.gap][i]
+                x2, y2, w2, h2, id2, conf_score2, vr2 = self.bbx[self.f_step][j]
+            else:
+                x1, y1, w1, h1, id1, conf_score1 = self.bbx[self.f_step-self.gap][i]
+                x2, y2, w2, h2, id2, conf_score2 = self.bbx[self.f_step][j]
+            v_x = (x2+w2/2 - (x1+w1/2))/t
+            v_y = (y2+h2/2 - (y1+h1/2))/t
+        self.detections[self.nxt][j][0][0][4] = v_x
+        self.detections[self.nxt][j][0][0][5] = v_y
 
     def loadNext(self):
         self.m = len(self.detections[self.cur])

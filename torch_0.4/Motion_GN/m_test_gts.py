@@ -251,7 +251,8 @@ class GN():
 
         step = head + self.train_set.setBuffer(head)
         while step < tail:
-            step += self.train_set.loadNext()
+            t_gap = self.train_set.loadNext()
+            step += t_gap
             # print head+step, 'F',
 
             u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
@@ -353,8 +354,8 @@ class GN():
                 while i != index:
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
-                    if attrs[-1] <= gap:
-                        attrs[-1] += 1
+                    if attrs[-1] + t_gap <= gap:
+                        attrs[-1] += t_gap
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.train_set.moveMotion(index)
@@ -363,8 +364,8 @@ class GN():
             while index < m:
                 attrs = line_con[self.cur][index]
                 # print '*', attrs, '*'
-                if attrs[-1] <= gap:
-                    attrs[-1] += 1
+                if attrs[-1] + t_gap <= gap:
+                    attrs[-1] += t_gap
                     line_con[self.nxt].append(attrs)
                     id_con[self.nxt].append(id_con[self.cur][index])
                     self.train_set.moveMotion(index)

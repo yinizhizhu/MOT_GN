@@ -5,7 +5,7 @@ from math import *
 from PIL import Image
 from m_mot_model import appearance
 import torch.nn.functional as F
-from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_dis,
+from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_dis
 from torchvision.transforms import ToTensor
 
 
@@ -40,7 +40,7 @@ class DatasetFromFolder(data.Dataset):
             shutil.rmtree(part+'/dets/')
 
     def loadAModel(self):
-        self.Appearance = appearance()
+        self.Appearance = torch.load('../MOT/Fine-tune_GPU_5_3_60_aug/appearance_19.pth')
         self.Appearance.to(self.device)
         self.Appearance.eval()  # fixing the BatchN layer
 
@@ -59,6 +59,10 @@ class DatasetFromFolder(data.Dataset):
     def readBBx_gt(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
+        imgs = [None for i in xrange(self.seqL + 1)]
+        for i in xrange(1, self.seqL+1):
+            img = load_img(self.img_dir + '%06d.jpg' % i)  # initial with loading the first frame
+            imgs[i] = img
         gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
         pre = -1
@@ -76,19 +80,25 @@ class DatasetFromFolder(data.Dataset):
                     continue
 
                 pre = id
-                self.bbx[index].append([x, y, w, h, id, conf_score, vr])
+                img = imgs[index]
+                width, height = float(img.size[0]), float(img.size[1])
+                self.bbx[index].append([x, y, w, h, id, conf_score, vr, width, height])
         f.close()
 
         gt_out = open(self.gt_dir + 'gt_det.txt', 'w')
         for index in xrange(1, self.seqL+1):
             for bbx in self.bbx[index]:
-                x,y, w, h, id, conf_score, vr = bbx
-                print >> gt_out, '%d,-1,%d,%d,%d,%d,%f,-1,-1,-1'%(index, x, y, w, h, conf_score)
+                x,y, w, h, id, conf_score, vr, width, heigth = bbx
+                print >> gt_out, '%d,%d,%d,%d,%d,%d,%f,-1,-1,-1'%(index, id, x, y, w, h, conf_score)
         gt_out.close()
 
     def readBBx_det(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
+        imgs = [None for i in xrange(self.seqL + 1)]
+        for i in xrange(1, self.seqL+1):
+            img = load_img(self.img_dir + '%06d.jpg' % i)  # initial with loading the first frame
+            imgs[i] = img
         det = self.det_dir + 'det.txt'
         f = open(det, 'r')
         for line in f.readlines():
@@ -99,7 +109,9 @@ class DatasetFromFolder(data.Dataset):
             w, h = float(line[4]), float(line[5])
             conf_score = float(line[6])
             if conf_score >= tau_conf_score:
-                self.bbx[index].append([x, y, w, h, conf_score])
+                img = imgs[index]
+                width, height = float(img.size[0]), float(img.size[1])
+                self.bbx[index].append([x, y, w, h, conf_score, width, height])
         f.close()
 
     def initBuffer(self):
@@ -208,26 +220,13 @@ class DatasetFromFolder(data.Dataset):
                 ret[i][j] = self.distance(bbx1, self.bbx[self.f_step][j])
         return ret
 
-    def getApp(self, tag, index, pre_index=None):
+    def getFeature(self, tag, index, pre_index=None, t=None):
         cur = self.cur if tag else self.nxt
-        if torch.is_tensor(index):
-            n = index.numel()
-            if n < 0:
-                print 'The tensor is empyt!'
-                return None
-            if tag == 0:
-                for k in xrange(n):
-                    i, j = pre_index[k].item(), index[k].item()
-                    self.updateVelocity(i, j)
-            if n == 1:
-                return self.detections[cur][index[0]][0]
-            ans = torch.cat((self.detections[cur][index[0]][0], self.detections[cur][index[1]][0]), dim=0)
-            for i in xrange(2, n):
-                ans = torch.cat((ans, self.detections[cur][index[i]][0]), dim=0)
-            return ans
+        if tag == 0:
+            self.updateVelocity(pre_index, index, t)
         return self.detections[cur][index][0]
 
-    def moveApp(self, index):
+    def moveFeature(self, index):
         self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx
         self.detections[self.nxt].append(self.detections[self.cur][index])   # add the appearance
 
@@ -254,23 +253,22 @@ class DatasetFromFolder(data.Dataset):
         apps = []
         with torch.no_grad():
             bbx_container = []
+            img = load_img(self.img_dir + '%06d.jpg' % self.f_step)  # initial with loading the first frame
             for bbx in self.bbx[self.f_step]:
                 """
                 Bellow Conditions needed be taken into consideration:
                     x, y < 0 and x+w > W, y+h > H
                 """
-                img = load_img(self.img_dir+'%06d.jpg'%self.f_step)  # initial with loading the first frame
                 if test_gt_det:
-                    x, y, w, h, id, conf_score, vr = bbx
+                    x, y, w, h, id, conf_score, vr, width, height = bbx
                 else:
-                    x, y, w, h, conf_score = bbx
+                    x, y, w, h, conf_score, width, height = bbx
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 if test_gt_det:
-                    bbx_container.append([x, y, w, h, id, conf_score, vr])
+                    bbx_container.append([x, y, w, h, id, conf_score, vr, width, height])
                 else:
-                    bbx_container.append([x, y, w, h, conf_score])
-                weight, height = float(img.size[0]), float(img.size[1])
-                motion = torch.FloatTensor([[(x+w/2)/weight, (y+h/2)/height, w/weight, h/height, 0.0, 0.0]]).to(self.device)
+                    bbx_container.append([x, y, w, h, conf_score, width, height])
+                motion = torch.FloatTensor([[(x+w/2)/width, (y+h/2)/height, w/width, h/height, 0.0, 0.0]]).to(self.device)
 
                 crop = img.crop([int(x), int(y), int(x + w), int(y + h)])
                 bbx = crop.resize((224, 224), Image.ANTIALIAS)
@@ -303,15 +301,19 @@ class DatasetFromFolder(data.Dataset):
         v_y = 0.0
         if i >= 0:
             if test_gt_det:
-                x1, y1, w1, h1, id1, conf_score1 = self.bbx[self.f_step-self.gap][i]
-                x2, y2, w2, h2, id2, conf_score2 = self.bbx[self.f_step][j]
+                x1, y1, w1, h1, id1, conf_score1, vr1, width1, height1 = self.bbx[self.f_step-self.gap][i]
+                x2, y2, w2, h2, id2, conf_score2, vr2, width2, height2 = self.bbx[self.f_step][j]
             else:
-                x1, y1, w1, h1, conf_score1 = self.bbx[self.f_step-self.gap][i]
-                x2, y2, w2, h2, conf_score2 = self.bbx[self.f_step][j]
-            v_x = (x2+w2/2 - (x1+w1/2))/t
-            v_y = (y2+h2/2 - (y1+h1/2))/t
+                x1, y1, w1, h1, conf_score1, width1, height1 = self.bbx[self.f_step-self.gap][i]
+                x2, y2, w2, h2, conf_score2, width2, height2 = self.bbx[self.f_step][j]
+            v_x = (x2+w2/2 - (x1+w1/2))/t/width1
+            v_y = (y2+h2/2 - (y1+h1/2))/t/height1
         self.detections[self.nxt][j][0][0][4] = v_x
         self.detections[self.nxt][j][0][0][5] = v_y
+
+    def getVelocity(self, matches):
+        for (i, j) in matches:
+            self.updateVelocity(i, j, 1)
 
     def loadNext(self):
         self.m = len(self.detections[self.cur])

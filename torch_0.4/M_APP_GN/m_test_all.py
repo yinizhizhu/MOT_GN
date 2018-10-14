@@ -37,6 +37,7 @@ class GN():
         :param length: the number of frames which is used for training
         :param cuda: True - GPU, False - CPU
         '''
+        self.bbx_counter = 0
         self.seq_index = seq_index
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
@@ -115,9 +116,10 @@ class GN():
         f.close()
 
     def loadModel(self):
-        self.Uphi = torch.load('Results/MOT16/IoU/all/uphi_13.pth').to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/all/ephi_13.pth').to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/all/u_13.pth')
+        name = 'all_m_app'
+        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_13.pth'%name).to(self.device)
+        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_13.pth'%name).to(self.device)
+        self.u = torch.load('Results/MOT16/IoU/%s/u_13.pth'%name)
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -159,6 +161,7 @@ class GN():
             else:
                 line = line[:-1]
             print >> out, line
+            self.bbx_counter += 1
         self.missingCounter += t-1
 
     def evaluation(self, head, tail, gtFile, outFile):
@@ -178,7 +181,8 @@ class GN():
 
         step = head + self.train_set.setBuffer(head)
         while step < tail:
-            step += self.train_set.loadNext()
+            t_gap = self.train_set.loadNext()
+            step += t_gap
             # print head+step, 'F',
 
             u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
@@ -206,6 +210,7 @@ class GN():
                         else:
                             line = line[:-1]
                         print >> out, line
+                        self.bbx_counter += 1
                         line_con[self.cur].append(attrs)
                         id_con[self.cur].append(id_step)
                         id_step += 1
@@ -229,8 +234,8 @@ class GN():
                 if ret[vs_index][vr_index] == 1.0:
                     continue
                 e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getApp(1, vs_index)
-                v2 = self.train_set.getApp(0, vr_index)
+                v1 = self.train_set.getFeature(1, vs_index)
+                v2 = self.train_set.getFeature(0, vr_index, vs_index, line_con[self.cur][vs_index][-1])
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -271,6 +276,7 @@ class GN():
                 else:
                     line = line[:-1]
                 print >> out, line
+                self.bbx_counter += 1
 
             # set the velocity - birth
             for j in look_up:
@@ -289,20 +295,31 @@ class GN():
                     else:
                         line = line[:-1]
                     print >> out, line
+                    self.bbx_counter += 1
                     id_step += 1
             out.close()
 
+            #  For missing & Occlusion
             index = 0
             for (i, j) in results:
                 while i != index:
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
-                    if attrs[-1] <= gap:
-                        attrs[-1] += 1
+                    if attrs[-1] + t_gap <= gap:
+                        attrs[-1] += t_gap
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
-                        self.train_set.moveApp(index)
+                        self.train_set.moveFeature(index)
                     index += 1
+                index += 1
+            while index < m:
+                attrs = line_con[self.cur][index]
+                # print '*', attrs, '*'
+                if attrs[-1] + t_gap <= gap:
+                    attrs[-1] += t_gap
+                    line_con[self.nxt].append(attrs)
+                    id_con[self.nxt].append(id_con[self.cur][index])
+                    self.train_set.moveFeature(index)
                 index += 1
 
             line_con[self.cur] = []
@@ -311,6 +328,7 @@ class GN():
             self.train_set.swapFC()
             self.swapFC()
         gtIn.close()
+        print '		The results:', id_step, self.bbx_counter
 
         # tra_tst = 'training sets' if head == 1 else 'validation sets'
         # out = open(outFile, 'a')
