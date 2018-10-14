@@ -22,7 +22,7 @@ def deleteDir(del_dir):
 
 
 class GN():
-    def __init__(self, lr=5e-3, batchs=8, cuda=True):
+    def __init__(self, lr=1e-3, batchs=8, cuda=True):
         '''
         :param tt: train_test
         :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
@@ -319,7 +319,7 @@ if __name__ == '__main__':
             os.mkdir(f_dir)
 
 
-        t_dir = f_dir + 'all/'
+        t_dir = f_dir + 'all_m_app/'
         if not os.path.exists(t_dir):
             os.mkdir(t_dir)
 

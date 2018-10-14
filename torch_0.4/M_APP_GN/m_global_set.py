@@ -24,6 +24,8 @@ f_gap = 5   # max frame number for recovering
 
 show_recovering = 0  # 1 - 11, 0 - 10
 
+overlap = 0.85  # IoU
+
 # edge_init|                       random                       |
 #  u_init  |        random           |            learned
 #          |   pre-lr  |     lr      |     pre-lr    |    lr    |

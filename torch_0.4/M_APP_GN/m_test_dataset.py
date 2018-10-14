@@ -1,28 +1,17 @@
 import torch.utils.data as data
-import torchvision, cv2, random, torch, shutil, os
-import torch.nn as nn
+import cv2, random, torch, shutil, os
 import numpy as np
 from math import *
 from PIL import Image
+from m_mot_model import appearance
 import torch.nn.functional as F
-from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_dis
+from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_dis,
 from torchvision.transforms import ToTensor
 
 
 def load_img(filepath):
     img = Image.open(filepath).convert('RGB')
     return img
-
-
-class appearance(nn.Module):
-    def __init__(self):
-        super(appearance, self).__init__()
-        features = list(torchvision.models.resnet34(pretrained=True).children())[:-1]
-        # print features
-        self.features = nn.Sequential(*features)
-
-    def forward(self, x):
-        return self.features(x)
 
 
 class DatasetFromFolder(data.Dataset):
@@ -280,7 +269,8 @@ class DatasetFromFolder(data.Dataset):
                     bbx_container.append([x, y, w, h, id, conf_score, vr])
                 else:
                     bbx_container.append([x, y, w, h, conf_score])
-                motion = torch.FloatTensor([[x+w/2, y+h/2, w, h, 0.0, 0.0]]).to(self.device)
+                weight, height = float(img.size[0]), float(img.size[1])
+                motion = torch.FloatTensor([[(x+w/2)/weight, (y+h/2)/height, w/weight, h/height, 0.0, 0.0]]).to(self.device)
 
                 crop = img.crop([int(x), int(y), int(x + w), int(y + h)])
                 bbx = crop.resize((224, 224), Image.ANTIALIAS)

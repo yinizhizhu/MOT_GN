@@ -1,27 +1,15 @@
 import torch.utils.data as data
-import torchvision, cv2, random, torch, shutil, os
-import torch.nn as nn
-import numpy as np
+import random, torch, shutil, os
 from PIL import Image
 import torch.nn.functional as F
-from m_global_set import edge_initial
+from m_global_set import edge_initial, overlap
+from m_mot_model import appearance
 from torchvision.transforms import ToTensor
 
 
 def load_img(filepath):
     img = Image.open(filepath).convert('RGB')
     return img
-
-
-class appearance(nn.Module):
-    def __init__(self):
-        super(appearance, self).__init__()
-        features = list(torchvision.models.resnet34(pretrained=True).children())[:-1]
-        # print features
-        self.features = nn.Sequential(*features)
-
-    def forward(self, x):
-        return self.features(x)
 
 
 class DatasetFromFolder(data.Dataset):
@@ -47,7 +35,7 @@ class DatasetFromFolder(data.Dataset):
             shutil.rmtree(part+'/dets/')
 
     def loadAModel(self):
-        self.Appearance = appearance()
+        self.Appearance = torch.load('../MOT/Fine-tune_GPU_5_3_60_aug/appearance_19.pth')
         self.Appearance.to(self.device)
         self.Appearance.eval()  # fixing the BatchN layer
 
@@ -63,9 +51,35 @@ class DatasetFromFolder(data.Dataset):
         f.close()
         print '     The length of the sequence:', self.seqL
 
+    def generator(self, bbx):
+        x, y, w, h, id, conf_score, vr, width, height = bbx
+        tmp = overlap*2/(1+overlap)
+        n_w = random.uniform(tmp*w, w)
+        n_h = tmp*w*float(h)/n_w
+
+        direction = random.randint(1, 4)
+        if direction == 1:
+            x = x + n_w - w
+            y = y + n_h - h
+        elif direction == 2:
+            x = x - n_w + w
+            y = y + n_h - h
+        elif direction == 3:
+            x = x + n_w - w
+            y = y - n_h + h
+        else:
+            x = x - n_w + w
+            y = y - n_h + h
+        ans = [x, y, w, h, id, conf_score, vr, width, height]
+        return ans
+
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
+        imgs = [None for i in xrange(self.seqL + 1)]
+        for i in xrange(1, self.seqL+1):
+            img = load_img(self.img_dir + '%06d.jpg' % i)  # initial with loading the first frame
+            imgs[i] = img
         gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
         pre = -1
@@ -83,7 +97,10 @@ class DatasetFromFolder(data.Dataset):
                     continue
 
                 pre = id
-                self.bbx[index].append([x, y, w, h, id, conf_score, vr])
+                img = imgs[index]
+                width, height = float(img.size[0]), float(img.size[1])
+                tmp_bbx = self.generator([x, y, w, h, id, conf_score, vr, width, height])
+                self.bbx[index].append(tmp_bbx)
         f.close()
 
     def initBuffer(self):
@@ -188,17 +205,6 @@ class DatasetFromFolder(data.Dataset):
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
 
-    def getV(self, x1, y1, id1):
-        if self.f_step == 1:
-            return 0.0, 0.0
-        for bbx in self.bbx[self.f_step-1]:
-            x, y, w, h, id, conf_score, vr = bbx
-            x += w/2
-            y += h/2
-            if id == id1:
-                return x1-x, y1-y
-        return 0.0, 0.0
-
     def resnet34(self, img):
         bbx = ToTensor()(img)
         bbx = bbx.to(self.device)
@@ -216,16 +222,16 @@ class DatasetFromFolder(data.Dataset):
         apps = []
         with torch.no_grad():
             bbx_container = []
+            img = load_img(self.img_dir + '%06d.jpg' % self.f_step)  # initial with loading the first frame
             for bbx in self.bbx[self.f_step]:
                 """
                 Condition needed be taken into consideration:
                     x, y < 0 and x+w > W, y+h > H
                 """
-                img = load_img(self.img_dir+'%06d.jpg'%self.f_step)  # initial with loading the first frame
-                x, y, w, h, id, conf_score, vr = bbx
+                x, y, w, h, id, conf_score, vr, width, height = bbx
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
-                bbx_container.append([x, y, w, h, id, conf_score, vr])
-                motion = torch.FloatTensor([[x+w/2, y+h/2, w, h, 0.0, 0.0]]).to(self.device)
+                bbx_container.append([x, y, w, h, id, conf_score, vr, width, height])
+                motion = torch.FloatTensor([[(x+w/2)/width, (y+h/2)/height, w/width, h/height, 0.0, 0.0]]).to(self.device)
 
                 crop = img.crop([int(x), int(y), int(x + w), int(y + h)])
                 bbx = crop.resize((224, 224), Image.ANTIALIAS)
@@ -240,12 +246,12 @@ class DatasetFromFolder(data.Dataset):
             self.detections[self.nxt] = apps
 
     def updateVelocity(self, i, j):
-        x1, y1, w1, h1, id1, conf_score1, vr1 = self.bbx[self.f_step-1][i]
-        x2, y2, w2, h2, id2, conf_score2, vr2 = self.bbx[self.f_step][j]
+        x1, y1, w1, h1, id1, conf_score1, vr1, width1, height1 = self.bbx[self.f_step-1][i]
+        x2, y2, w2, h2, id2, conf_score2, vr2, width2, height2 = self.bbx[self.f_step][j]
         v_x = x2+w2/2 - (x1+w1/2)
         v_y = y2+h2/2 - (y1+h1/2)
-        self.detections[self.nxt][j][0][0][4] = v_x
-        self.detections[self.nxt][j][0][0][5] = v_y
+        self.detections[self.nxt][j][0][0][4] = v_x/width1
+        self.detections[self.nxt][j][0][0][5] = v_y/height1
 
     def getVelocity(self):
         for (i, j) in self.matches:
