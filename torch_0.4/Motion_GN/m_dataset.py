@@ -2,7 +2,7 @@ import torch.utils.data as data
 import random, torch, shutil, os
 from PIL import Image
 import torch.nn.functional as F
-from m_global_set import edge_initial
+from m_global_set import edge_initial, overlap
 
 
 def load_img(filepath):
@@ -58,6 +58,30 @@ class DatasetFromFolder(data.Dataset):
         h -= y
         return x, y, w, h
 
+    def generator(self, bbx):
+        if random.randint(0, 1):
+            x, y, w, h = bbx
+            tmp = overlap*2/(1+overlap)
+            n_w = random.uniform(tmp*w, w)
+            n_h = tmp*w*h/n_w
+
+            direction = random.randint(1, 4)
+            if direction == 1:
+                x = x + n_w - w
+                y = y + n_h - h
+            elif direction == 2:
+                x = x - n_w + w
+                y = y + n_h - h
+            elif direction == 3:
+                x = x + n_w - w
+                y = y - n_h + h
+            else:
+                x = x - n_w + w
+                y = y - n_h + h
+            ans = [x, y, w, h]
+            return ans
+        return bbx
+
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
@@ -76,6 +100,7 @@ class DatasetFromFolder(data.Dataset):
                 conf_score, l, vr = float(line[6]), int(line[7]), float(line[8])
 
                 img = imgs[index]
+                x, y, w, h = self.generator([x, y, w, h])
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 width, height = float(img.size[0]), float(img.size[1])
                 self.bbx[index].append([x/width, y/height, w/width, h/height, id, vr])

@@ -4,7 +4,7 @@ import numpy as np
 from PIL import Image
 import torch.nn.functional as F
 from mot_model import appearance
-from global_set import edge_initial, app_fine_tune, fine_tune_dir
+from global_set import edge_initial, app_fine_tune, fine_tune_dir, overlap
 from torchvision.transforms import ToTensor
 
 
@@ -56,6 +56,31 @@ class DatasetFromFolder(data.Dataset):
         f.close()
         print '     The length of the sequence:', self.seqL
 
+    def generator(self, bbx):
+        if random.randint(0, 1):
+            x, y, w, h = bbx
+            x, y, w = float(x), float(y), float(w),
+            tmp = overlap*2/(1+overlap)
+            n_w = random.uniform(tmp*w, w)
+            n_h = tmp*w*float(h)/n_w
+
+            direction = random.randint(1, 4)
+            if direction == 1:
+                x = x + n_w - w
+                y = y + n_h - h
+            elif direction == 2:
+                x = x - n_w + w
+                y = y + n_h - h
+            elif direction == 3:
+                x = x + n_w - w
+                y = y - n_h + h
+            else:
+                x = x - n_w + w
+                y = y - n_h + h
+            ans = [int(x), int(y), int(w), h]
+            return ans
+        return bbx
+
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
@@ -76,6 +101,7 @@ class DatasetFromFolder(data.Dataset):
                     continue
 
                 pre = id
+                x, y, w, h = self.generator([x, y, w, h])
                 self.bbx[index].append([x, y, w, h, id, vr])
         f.close()
 
