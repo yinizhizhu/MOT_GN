@@ -15,7 +15,7 @@ test_gt_det = 0  # 1 - detections of gt, 0 - detections of det
 
 tau_conf_score = 0.0  # The threshold of confidence score
 
-tau_threshold = 0.9  # The threshold of matching cost
+tau_threshold = 1.0  # The threshold of matching cost
 
 tau_dis = 2.0   # The times of the current bbx's scale
 
@@ -28,6 +28,9 @@ f_gap = 5   # max frame number for recovering
 show_recovering = 0  # 1 - 11, 0 - 10
 
 app_fine_tune = 1   # 1 - fine-tuned the appearance model, 0 - pre-trained appearance model
+fine_tune_dir = 'Fine-tune_GPU_5_3_60_aug/appearance_19.pth'
+
+overlap = 0.85  # the IoU
 
 # edge_init|                       random                       |
 #  u_init  |        random           |            learned

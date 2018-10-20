@@ -12,7 +12,7 @@ t_dir = ''  # the dir of the final level
 seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
 lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
 
-target = '20_edge'  # inner, cross, gts
+target = 'app_b_fixed_1'  # inner, cross, gts
 
 type_dir = 'IoU' if edge_initial == 0 else 'Random'
 
@@ -29,7 +29,7 @@ def rename():
         os.mkdir(out_dir)
         print 'There is no dir:', out_dir
     print '     ', out_dir, target_dir
-    os.rename(out_dir, target_dir)
+    # os.rename(out_dir, target_dir)
 
 
 if __name__ == '__main__':

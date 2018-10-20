@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from dataset import DatasetFromFolder
 import time, random, os, shutil
 from munkres import Munkres
-from global_set import edge_initial, u_initial
+from global_set import edge_initial, u_initial, app_fine_tune
 
 from tensorboardX import SummaryWriter
 
@@ -30,13 +30,14 @@ np.random.seed(123)
 t_dir = ''  # the dir of the final level
 sequence_dir = ''  # the dir of the training dataset
 
+name = 'FT' if app_fine_tune else ''
 
 def deleteDir(del_dir):
     shutil.rmtree(del_dir)
 
 
 class GN():
-    def __init__(self, tt, tag, lr=5e-3, batchs=8, cuda=True):
+    def __init__(self, tt, tag, lr=1e-3, batchs=8, cuda=True):
         '''
         :param tt: train_test
         :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
@@ -52,7 +53,7 @@ class GN():
         self.lr = lr
         self.batchsize = batchs
         self.numWorker = 4
-        self.outName = t_dir+'result.txt'
+        self.outName = t_dir+'result%s.txt'%name
 
         self.show_process = 0   # interaction
         self.step_input = 1
@@ -224,11 +225,11 @@ class GN():
 
     def saveModel(self):
         print 'Saving the Uphi model...'
-        torch.save(self.Uphi, t_dir+'uphi.pth')
+        torch.save(self.Uphi, t_dir+'uphi%s.pth'%name)
         print 'Saving the Ephi model...'
-        torch.save(self.Ephi, t_dir+'ephi.pth')
+        torch.save(self.Ephi, t_dir+'ephi%s.pth'%name)
         print 'Saving the global variable u...'
-        torch.save(self.u, t_dir+'u.pth')
+        torch.save(self.u, t_dir+'u%s.pth'%name)
         print 'Done!'
 
     def updateUE(self):
@@ -270,11 +271,11 @@ class GN():
         total_ed = 0.0
         for step in xrange(1, self.train_test):
             self.train_set.loadNext()
-            print head+step, 'F',
+            # print head+step, 'F',
 
             u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
 
-            print 'Fo'
+            # print 'Fo'
             m = self.train_set.m
             n = self.train_set.n
             ret = [[0.0 for i in xrange(n)] for j in xrange(m)]
@@ -282,7 +283,7 @@ class GN():
             total_gt += step_gt
 
             # update the edges
-            print 'T',
+            # print 'T',
             for edge in self.train_set.candidates:
                 e, gt, vs_index, vr_index = edge
                 e = e.to(self.device).view(1,-1)
@@ -297,17 +298,17 @@ class GN():
             self.train_set.showE()
             self.showU()
 
-            for j in ret:
-                print j
+            # for j in ret:
+            #     print j
             results = self.hungarian.compute(ret)
-            print head+step, results,
+            # print head+step, results,
             step_ed = 0.0
             for (j, k) in results:
                 step_ed += self.train_set.gts[j][k].numpy()[0]
             total_ed += step_ed
 
-            print 'Fi'
-            print 'Step ACC:{}/{}({}%)'.format(int(step_ed), int(step_gt), step_ed/step_gt*100)
+            # print 'Fi'
+            print head+step, 'Step ACC:{}/{}({}%)'.format(int(step_ed), int(step_gt), step_ed/step_gt*100)
             self.train_set.swapFC()
 
         tra_tst = 'training sets' if head == 1 else 'testing sets'
@@ -338,11 +339,11 @@ if __name__ == '__main__':
         if not os.path.exists(f_dir):
             os.mkdir(f_dir)
 
-        # seqs = [2, 4, 5, 9, 10, 11, 13]
-        # lengths = [600, 1050, 837, 525, 654, 900, 750]
-        seqs = [10, 11, 13]
-        lengths = [654, 900, 750]
-        for i in xrange(3):
+        seqs = [2, 4, 5, 9, 10, 11, 13]
+        lengths = [600, 1050, 837, 525, 654, 900, 750]
+        # seqs = [10, 11, 13]
+        # lengths = [654, 900, 750]
+        for i in xrange(7):
             seq_index = seqs[i]
             tts = [tt for tt in xrange(100, 600, 100)]
             length = lengths[i]

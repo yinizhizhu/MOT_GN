@@ -1,27 +1,16 @@
 import torch.utils.data as data
-import torchvision, cv2, random, torch, shutil, os
-import torch.nn as nn
+import cv2, random, torch, shutil, os
 import numpy as np
 from PIL import Image
 import torch.nn.functional as F
-from global_set import edge_initial
+from mot_model import appearance
+from global_set import edge_initial, app_fine_tune, fine_tune_dir
 from torchvision.transforms import ToTensor
 
 
 def load_img(filepath):
     img = Image.open(filepath).convert('RGB')
     return img
-
-
-class appearance(nn.Module):
-    def __init__(self):
-        super(appearance, self).__init__()
-        features = list(torchvision.models.resnet34(pretrained=True).children())[:-1]
-        # print features
-        self.features = nn.Sequential(*features)
-
-    def forward(self, x):
-        return self.features(x)
 
 
 class DatasetFromFolder(data.Dataset):
@@ -48,7 +37,10 @@ class DatasetFromFolder(data.Dataset):
             shutil.rmtree(part+'/dets/')
 
     def loadAModel(self):
-        self.Appearance = appearance()
+        if app_fine_tune:
+            self.Appearance = torch.load(fine_tune_dir)
+        else:
+            self.Appearance = appearance()
         self.Appearance.to(self.device)
         self.Appearance.eval()  # fixing the BatchN layer
 
@@ -62,7 +54,7 @@ class DatasetFromFolder(data.Dataset):
             if line[0] == 'seqLength':
                 self.seqL = int(line[1])
         f.close()
-        print 'The length of the sequence:', self.seqL
+        print '     The length of the sequence:', self.seqL
 
     def readBBx(self):
         # get the gt
@@ -276,7 +268,7 @@ class DatasetFromFolder(data.Dataset):
         self.f_step += 1
         self.feature()
         self.initEC()
-        print '     The index of the next frame', self.f_step
+        # print '     The index of the next frame', self.f_step
         # print self.detections[self.cur]
         # print self.detections[self.nxt]
 

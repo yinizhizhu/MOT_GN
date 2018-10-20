@@ -12,11 +12,11 @@ def load_img(filepath):
 
 
 class DatasetFromFolder(data.Dataset):
-    def __init__(self, part, cuda=True):
+    def __init__(self, part, part_I, cuda=True):
         super(DatasetFromFolder, self).__init__()
         self.dir = part
         self.cleanPath(part)
-        self.img_dir = part + '/img1/'
+        self.img_dir = part_I + '/img1/'
         self.gt_dir = part + '/gt/'
         self.det_dir = part + '/det/'
         self.device = torch.device("cuda" if cuda else "cpu")
@@ -46,9 +46,20 @@ class DatasetFromFolder(data.Dataset):
         f.close()
         # print 'The length of the sequence:', self.seqL
 
+    def fixBB(self, x, y, w, h, size):
+        width, height = size
+        w = min(w+x, width)
+        h = min(h+y, height)
+        x = max(x, 0)
+        y = max(y, 0)
+        w -= x
+        h -= y
+        return x, y, w, h
+
     def readBBx_gt(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
+        bbxs = [[] for i in xrange(self.seqL + 1)]
         imgs = [None for i in xrange(self.seqL + 1)]
         for i in xrange(1, self.seqL + 1):
             imgs[i] = load_img(self.img_dir+'%06d.jpg'%i)
@@ -69,15 +80,16 @@ class DatasetFromFolder(data.Dataset):
                     continue
 
                 pre = id
-                img = imgs[i]
+                img = imgs[index]
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 width, height = float(img.size[0]), float(img.size[1])
                 self.bbx[index].append([x/width, y/height, w/width, h/height, id, conf_score, vr])
+                bbxs[index].append([x, y, w, h, id, conf_score, vr])
         f.close()
 
         gt_out = open(self.gt_dir + 'gt_det.txt', 'w')
         for index in xrange(1, self.seqL+1):
-            for bbx in self.bbx[index]:
+            for bbx in bbxs[index]:
                 x,y, w, h, id, conf_score, vr = bbx
                 print >> gt_out, '%d,-1,%d,%d,%d,%d,%f,-1,-1,-1'%(index, x, y, w, h, conf_score)
         gt_out.close()
@@ -123,16 +135,6 @@ class DatasetFromFolder(data.Dataset):
             print '           Empty in setBuffer:', counter
         return counter
 
-    def fixBB(self, x, y, w, h, size):
-        width, height = size
-        w = min(w+x, width)
-        h = min(h+y, height)
-        x = max(x, 0)
-        y = max(y, 0)
-        w -= x
-        h -= y
-        return x, y, w, h
-
     def IOU(self, Reframe, GTframe):
         """
         Compute the Intersection of Union
@@ -171,17 +173,6 @@ class DatasetFromFolder(data.Dataset):
             ratio = Area * 1. / (Area1 + Area2 - Area)
         return ratio
 
-    def getMN(self, m, n):
-        ans = [[None for i in xrange(n)] for i in xrange(m)]
-        for i in xrange(m):
-            Reframe = self.bbx[self.f_step-self.gap][i]
-            for j in xrange(n):
-                GTframe = self.bbx[self.f_step][j]
-                p = self.IOU(Reframe, GTframe)
-                # 1 - match, 0 - mismatch
-                ans[i][j] = torch.FloatTensor([1 - p, p])
-        return ans
-
     def aggregate(self, set):
         if len(set):
             rho = sum(set)
@@ -211,7 +202,8 @@ class DatasetFromFolder(data.Dataset):
         cur = self.cur if tag else self.nxt
         if tag == 0:
             self.updateVelocity(pre_index, index, t)
-        return self.detections[cur][index][0]
+            return self.detections[cur][index][0][pre_index]
+        return self.detections[cur][index][0][0]
 
     def moveMotion(self, index):
         self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx: x, y, w, h, id, conf_score
@@ -239,31 +231,7 @@ class DatasetFromFolder(data.Dataset):
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
 
-    def feature(self, tag=0):
-        '''
-        Getting the appearance of the detections in current frame
-        :param tag: 1 - initiating
-        :param show: 1 - show the cropped & src image
-        :return: None
-        '''
-        motions = []
-        with torch.no_grad():
-            for bbx in self.bbx[self.f_step]:
-                """
-                Bellow Conditions needed be taken into consideration:
-                    x, y < 0 and x+w > W, y+h > H
-                """
-                if test_gt_det:
-                    x, y, w, h, id, conf_score, vr = bbx
-                else:
-                    x, y, w, h, id, conf_score = bbx
-                motions.append([torch.FloatTensor([[x+w/2, y+h/2, w, h, 0.0, 0.0]]), id])
-        if tag:
-            self.detections[self.cur] = motions
-        else:
-            self.detections[self.nxt] = motions
-
-    def updateVelocity(self, i, j, t=None):
+    def updateVelocity(self, i, j, t=None, tag=True):
         v_x = 0.0
         v_y = 0.0
         if i != -1:
@@ -275,8 +243,55 @@ class DatasetFromFolder(data.Dataset):
                 x2, y2, w2, h2, id2, conf_score2 = self.bbx[self.f_step][j]
             v_x = (x2+w2/2 - (x1+w1/2))/t
             v_y = (y2+h2/2 - (y1+h1/2))/t
-        self.detections[self.nxt][j][0][0][4] = v_x
-        self.detections[self.nxt][j][0][0][5] = v_y
+        if tag:
+            # print 'm=%d,n=%d; i=%d, j=%d'%(len(self.detections[self.cur]), len(self.detections[self.nxt]), i, j)
+            self.detections[self.nxt][j][0][i][0][4] = v_x
+            self.detections[self.nxt][j][0][i][0][5] = v_y
+        else:
+            cur_m = self.detections[self.nxt][j][0][0]
+            cur_m[0][4] = v_x
+            cur_m[0][5] = v_y
+            self.detections[self.nxt][j][0] = [cur_m]
+
+    def getMN(self, m, n):
+        cur = self.f_step - self.gap
+        ans = [[None for i in xrange(n)] for i in xrange(m)]
+        for i in xrange(m):
+            Reframe = self.bbx[cur][i]
+            for j in xrange(n):
+                GTframe = self.bbx[self.f_step][j]
+                p = self.IOU(Reframe, GTframe)
+                # 1 - match, 0 - mismatch
+                ans[i][j] = torch.FloatTensor([1 - p, p])
+        return ans
+
+    def feature(self, tag=0):
+        '''
+        Getting the appearance of the detections in current frame
+        :param tag: 1 - initiating
+        :param show: 1 - show the cropped & src image
+        :return: None
+        '''
+        motions = []
+        with torch.no_grad():
+            m = 1 if tag else self.m
+            for bbx in self.bbx[self.f_step]:
+                """
+                Bellow Conditions needed be taken into consideration:
+                    x, y < 0 and x+w > W, y+h > H
+                """
+                if test_gt_det:
+                    x, y, w, h, id, conf_score, vr = bbx
+                else:
+                    x, y, w, h, id, conf_score = bbx
+                cur_m = []
+                for i in xrange(m):
+                    cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]))
+                motions.append([cur_m, id])
+        if tag:
+            self.detections[self.cur] = motions
+        else:
+            self.detections[self.nxt] = motions
 
     def loadNext(self):
         self.m = len(self.detections[self.cur])
@@ -310,7 +325,7 @@ class DatasetFromFolder(data.Dataset):
         for i in xrange(2):
             n = len(self.detections[i])
             for j in xrange(n):
-                v = self.detections[i][j][0]
+                v = self.detections[i][j][0][0]
                 vs.append(v)
 
         self.E = self.aggregate(es).to(self.device).view(1,-1)

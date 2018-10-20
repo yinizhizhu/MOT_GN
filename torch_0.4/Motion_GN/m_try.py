@@ -9,11 +9,5 @@ def testIndex():
     results = b.compute(a)
     print results
 
-
-a = torch.FloatTensor([random.random() for i in xrange(10)])
-print a
-print a[0], a[0].item()
-
-index = [i for i in xrange(10)]
-for i in xrange(len(index)-1, -1, -1):
-    print index[i]
+for i in xrange(6, 10, 1):
+    print i

@@ -2,11 +2,24 @@ import shutil, os, time
 from PIL import Image
 import matplotlib.pyplot as plt
 from m_global_set import tau_conf_score
+import scipy.stats as st
 
 #   sum             max        min      mean
-# 32734.8303875 0.990939826548 0.5 0.763209773322
-# False negative:1.546875 (66347/42891)
-# Missing: 0.000000 (0/42891)
+#               DPM
+# 32354.9314411 0.990939826548 0.5 0.765434857844
+# False negative:140.861131 %, (59542/42270)
+# Missing: 0.000000 % (0/42270)
+# Zero: 0
+#               SDP
+# 67343.8719538 1.0 0.500022322425 0.821046450389
+# False negative:24.127673 %, (19790/82022)
+# Missing: 0.000000 % (0/82022)
+# Zero: 0
+#               FRCNN
+# 56449.5548949 0.997486530172 0.5 0.875797919399
+# False negative:57.958265 %, (37357/64455)
+# Missing: 0.000000 % (0/64455)
+# Zero: 0
 
 
 def load_img(filepath):
@@ -16,38 +29,56 @@ def load_img(filepath):
 
 class tau_iou():
     def __init__(self):
+        types = ['DPM', 'SDP', 'FRCNN']
         seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
         lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
-        self.IOU = []
-        self.false_negative = 0
-        self.missing = 0
 
-        head = time.time()
-        for i in xrange(7):
-            start = time.time()
-            part = '../MOT/MOT16/train/MOT16-%02d'%seqs[i]
-            self.dir = part
-            self.cleanPath(part)
-            self.img_dir = part + '/img1/'
-            self.gt_dir = part + '/gt/'
-            self.det_dir = part + '/det/'
+        for type in types:
+            head = time.time()
+            self.IOU = []
+            self.false_negative = 0
+            self.missing = 0
+            self.zero = 0
+            for i in xrange(7):
+                start = time.time()
+                part_I = '../MOT/MOT16/train/MOT16-%02d'%seqs[i]
+                part = '../MOT/MOT17/train/MOT17-%02d-%s'%(seqs[i], type)
+                self.dir = part
+                self.cleanPath(part)
+                self.img_dir = part_I + '/img1/'
+                self.gt_dir = part + '/gt/'
+                self.det_dir = part + '/det/'
 
-            self.seqL = lengths[i]
-            self.readBBx()
-            self.doit()
-            print 'Time consuming:', (time.time() - start) / 60.0
-        print 'Time consuming:', (time.time() - head) / 60.0
-        total = len(self.IOU)*1.0
-        self.IOU = sorted(self.IOU)
-        s = sum(self.IOU)
-        mx = max(self.IOU)
-        mn = min(self.IOU)
-        mean = s/total
-        print s, mx, mn, mean
-        print 'False negative:%f %%, (%d/%d)'%(self.false_negative/total*100, self.false_negative, total)
-        print 'Missing: %f %% (%d/%d)'%(self.missing/total*100, self.missing, total)
-        plt.plot(self.IOU)
-        plt.show()
+                self.seqL = lengths[i]
+                self.readBBx()
+                self.doit()
+                print 'Time consuming:', (time.time() - start) / 60.0
+            print 'Time consuming:', (time.time() - head) / 60.0
+            total = len(self.IOU)*1.0
+            self.IOU = sorted(self.IOU)
+            s = sum(self.IOU)
+            mx = max(self.IOU)
+            mn = min(self.IOU)
+            mean = s/total
+            print s, mx, mn, mean
+            gt = self.false_negative + total
+            print 'False negative:%f %%, (%d/%d)'%(self.false_negative/gt*100, self.false_negative, gt)
+            print 'Missing: %f %% (%d/%d)'%(self.missing/total*100, self.missing, total)
+            print 'Zero:', self.zero
+
+            plt.figure()
+            plt.plot(self.IOU)
+            plt.plot([0, self.getIndex(mean, total)], [mean, mean], 'b--')
+            for i in xrange(6, 10, 1):
+                plt.plot([0, self.getIndex(i/10.0, total)], [i/10.0, i/10.0], 'm:')
+            plt.savefig("Results/%s.png"%type)
+            plt.close(0)
+
+    def getIndex(self, v, total):
+        total = int(total)
+        for i in xrange(total):
+            if self.IOU[i] > v:
+                return i
 
     def cleanPath(self, part):
         if os.path.exists(part+'/gts/'):
@@ -73,7 +104,6 @@ class tau_iou():
             imgs[i] = load_img(self.img_dir+'%06d.jpg'%i)
         gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
-        pre = -1
         for line in f.readlines():
             line = line.strip().split(',')
             if line[7] == '1':
@@ -84,10 +114,9 @@ class tau_iou():
                 conf_score, l, vr = float(line[6]), int(line[7]), float(line[8])
 
                 # sweep the invisible head-bbx from the training data
-                if pre != id and vr == 0:
+                if vr == 0:
                     continue
 
-                pre = id
                 img = imgs[i]
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 self.gt_bbx[index].append([x, y, w, h, conf_score])
@@ -145,20 +174,29 @@ class tau_iou():
         return ratio
 
     def doit(self):
+        min_conf_score = 1.0
         for i in xrange(1, self.seqL+1):
             gts = self.gt_bbx[i]
             dets = self.det_bbx[i]
             for gt in gts:
                 iou = 0.0
                 for det in dets:
+                    cs = det[4]
                     tmp = self.C_IOU(det, gt)
-                    iou = max(tmp, iou)
+                    if tmp > iou:
+                        iou = tmp
+                    if cs >= 0.0 and cs < 1e-7:
+                        self.zero += 1
+                    if tmp >= 0.5:
+                        if cs < 0.0:
+                            self.missing += 1
+                        else:
+                            min_conf_score = min(min_conf_score, cs)
                 if iou >= 0.5:
-                    if det[4] < 0.0:
-                        self.missing += 1
                     self.IOU.append(iou)
                 else:
                     self.false_negative += 1
+        print '     tau_conf_score:', min_conf_score
         return
 
 a = tau_iou()

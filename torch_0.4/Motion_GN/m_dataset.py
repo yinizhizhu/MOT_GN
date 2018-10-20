@@ -48,6 +48,16 @@ class DatasetFromFolder(data.Dataset):
         f.close()
         print '     The length of the sequence:', self.seqL
 
+    def fixBB(self, x, y, w, h, size):
+        width, height = size
+        w = min(w+x, width)
+        h = min(h+y, height)
+        x = max(x, 0)
+        y = max(y, 0)
+        w -= x
+        h -= y
+        return x, y, w, h
+
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
@@ -56,7 +66,6 @@ class DatasetFromFolder(data.Dataset):
             imgs[i] = load_img(self.img_dir+'%06d.jpg'%i)
         gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
-        pre = -1
         for line in f.readlines():
             line = line.strip().split(',')
             if line[7] == '1':
@@ -66,12 +75,7 @@ class DatasetFromFolder(data.Dataset):
                 w, h = float(line[4]), float(line[5])
                 conf_score, l, vr = float(line[6]), int(line[7]), float(line[8])
 
-                # sweep the invisible head-bbx from the training data
-                if pre != id and vr == 0:
-                    continue
-
-                pre = id
-                img = imgs[i]
+                img = imgs[index]
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 width, height = float(img.size[0]), float(img.size[1])
                 self.bbx[index].append([x/width, y/height, w/width, h/height, id, vr])
@@ -87,16 +91,6 @@ class DatasetFromFolder(data.Dataset):
     def setBuffer(self, f):
         self.f_step = f
         self.feature(1)
-
-    def fixBB(self, x, y, w, h, size):
-        width, height = size
-        w = min(w+x, width)
-        h = min(h+y, height)
-        x = max(x, 0)
-        y = max(y, 0)
-        w -= x
-        h -= y
-        return x, y, w, h
 
     def IOU(self, Reframe, GTframe):
         """
@@ -136,11 +130,81 @@ class DatasetFromFolder(data.Dataset):
             ratio = Area * 1. / (Area1 + Area2 - Area)
         return ratio
 
-    def getMN(self, m, n):
-        ans = [[None for i in xrange(n)] for i in xrange(m)]
-        for i in xrange(m):
-            Reframe = self.bbx[self.f_step-1][i]
-            for j in xrange(n):
+    def swapFC(self):
+        self.getVelocity()
+        self.cur = self.cur ^ self.nxt
+        self.nxt = self.cur ^ self.nxt
+        self.cur = self.cur ^ self.nxt
+
+    def getMotion(self, tag, index, pre_index=None):
+        cur = self.cur if tag else self.nxt
+        if torch.is_tensor(index):
+            n = index.numel()
+            if n < 0:
+                print 'The tensor is empyt!'
+                return None
+            if tag == 0:
+                for k in xrange(n):
+                    i, j = pre_index[k].item(), index[k].item()
+                    self.updateVelocity(i, j)
+                if n == 1:
+                    return self.detections[cur][index[0]][0][pre_index[0]]
+                ans = torch.cat((self.detections[cur][index[0]][0][pre_index[0]],
+                                 self.detections[cur][index[1]][0][pre_index[1]]), dim=0)
+                for i in xrange(2, n):
+                    ans = torch.cat((ans, self.detections[cur][index[i]][0][pre_index[i]]), dim=0)
+                return ans
+            if n == 1:
+                return self.detections[cur][index[0]][0][0]
+            ans = torch.cat((self.detections[cur][index[0]][0][0],
+                             self.detections[cur][index[1]][0][0]), dim=0)
+            for i in xrange(2, n):
+                ans = torch.cat((ans, self.detections[cur][index[i]][0][0]), dim=0)
+            return ans
+        if tag == 0:
+            self.updateVelocity(pre_index, index)
+            return self.detections[cur][index][0][pre_index]
+        return self.detections[cur][index][0][0]
+
+    def updateVelocity(self, i, j, tag=True):
+        '''
+        :param i: cur_index, -1 - birth
+        :param j: nxt_index
+        :param tag: True - update the velocity in the next frame, False - Write down the final velocity
+        :return:
+        '''
+        v_x, v_y = 0.0, 0.0
+        if i >= 0:
+            x1, y1, w1, h1, id1, vr1 = self.bbx[self.f_step-1][i]
+            x2, y2, w2, h2, id2, vr2 = self.bbx[self.f_step][j]
+            v_x = x2+w2/2 - (x1+w1/2)
+            v_y = y2+h2/2 - (y1+h1/2)
+        if tag:
+            self.detections[self.nxt][j][0][i][0][4] = v_x
+            self.detections[self.nxt][j][0][i][0][5] = v_y
+        else:
+            cur_m = self.detections[self.nxt][j][0][0]
+            cur_m[0][4] = v_x
+            cur_m[0][5] = v_y
+            self.detections[self.nxt][j][0] = [cur_m]
+
+    def getVelocity(self):
+        remaining = set(j for j in xrange(self.n))
+        # For the connection between two detections
+        for (i, j) in self.matches:
+            remaining.remove(j)
+            self.updateVelocity(i, j, False)
+
+        # For the birth of objects
+        for j in remaining:
+            self.updateVelocity(-1, j, False)
+
+    def getMN(self):
+        cur = self.f_step - 1
+        ans = [[None for j in xrange(self.n)] for i in xrange(self.m)]
+        for i in xrange(self.m):
+            Reframe = self.bbx[cur][i]
+            for j in xrange(self.n):
                 GTframe = self.bbx[self.f_step][j]
                 p = self.IOU(Reframe, GTframe)
                 # 1 - match, 0 - mismatch
@@ -154,84 +218,11 @@ class DatasetFromFolder(data.Dataset):
         print '     The set is empty!'
         return None
 
-    def getMotion(self, tag, index, pre_index=None):
-        cur = self.cur if tag else self.nxt
-        if torch.is_tensor(index):
-            n = index.numel()
-            if n < 0:
-                print 'The tensor is empyt!'
-                return None
-            if tag == 0:
-                for k in xrange(n):
-                    i, j = pre_index[k].item(), index[k].item()
-                    self.updateVelocity(i, j)
-            if n == 1:
-                return self.detections[cur][index[0]][0]
-            ans = torch.cat((self.detections[cur][index[0]][0], self.detections[cur][index[1]][0]), dim=0)
-            for i in xrange(2, n):
-                ans = torch.cat((ans, self.detections[cur][index[i]][0]), dim=0)
-            return ans
-        if tag == 0:
-            self.updateVelocity(pre_index, index)
-        return self.detections[cur][index][0]
-
-    def swapFC(self):
-        self.getVelocity()
-        self.cur = self.cur ^ self.nxt
-        self.nxt = self.cur ^ self.nxt
-        self.cur = self.cur ^ self.nxt
-
-    def getV(self, x1, y1, id1):
-        if self.f_step == 1:
-            return 0.0, 0.0
-        for bbx in self.bbx[self.f_step-1]:
-            x, y, w, h, id, vr = bbx
-            x += w/2
-            y += h/2
-            if id == id1:
-                return x1-x, y1-y
-        return 0.0, 0.0
-
-    def feature(self, tag=0):
-        '''
-        Getting the appearance of the detections in current frame
-        :param tag: 1 - initiating
-        :return: None
-        '''
-        motions = []
-        with torch.no_grad():
-            for bbx in self.bbx[self.f_step]:
-                """
-                Condition needed be taken into consideration:
-                    x, y < 0 and x+w > W, y+h > H
-                """
-                x, y, w, h, id, vr = bbx
-                x += w/2
-                y += h/2
-                # v_x, v_y = self.getV(x, y, id)
-                motions.append([torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]), id])
-        if tag:
-            self.detections[self.cur] = motions
-        else:
-            self.detections[self.nxt] = motions
-
-    def updateVelocity(self, i, j):
-        x1, y1, w1, h1, id1, vr1 = self.bbx[self.f_step-1][i]
-        x2, y2, w2, h2, id2, vr2 = self.bbx[self.f_step][j]
-        v_x = x2+w2/2 - (x1+w1/2)
-        v_y = y2+h2/2 - (y1+h1/2)
-        self.detections[self.nxt][j][0][0][4] = v_x
-        self.detections[self.nxt][j][0][0][5] = v_y
-
-    def getVelocity(self):
-        for (i, j) in self.matches:
-            self.updateVelocity(i, j)
-
     def initEC(self):
         self.m = len(self.detections[self.cur])
         self.n = len(self.detections[self.nxt])
         self.candidates = []
-        self.edges = self.getMN(self.m, self.n)
+        self.edges = self.getMN()
         self.matches = []
         self.gts = [[None for j in xrange(self.n)] for i in xrange(self.m)]
         self.step_gt = 0.0
@@ -259,11 +250,37 @@ class DatasetFromFolder(data.Dataset):
         for i in xrange(2):
             n = len(self.detections[i])
             for j in xrange(n):
-                v = self.detections[i][j][0]
+                v = self.detections[i][j][0][0]
                 vs.append(v)
 
         self.E = self.aggregate(es).to(self.device).view(1,-1)
         self.V = self.aggregate(vs).to(self.device)
+
+    def feature(self, tag=0):
+        '''
+        Getting the appearance of the detections in current frame
+        :param tag: 1 - initiating
+        :return: None
+        '''
+        motions = []
+        with torch.no_grad():
+            m = 1 if tag else len(self.bbx[self.f_step-1])
+            for bbx in self.bbx[self.f_step]:
+                """
+                Condition needed be taken into consideration:
+                    x, y < 0 and x+w > W, y+h > H
+                """
+                x, y, w, h, id, vr = bbx
+                x += w/2
+                y += h/2
+                cur_m = []
+                for i in xrange(m):
+                    cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]))
+                motions.append([cur_m, id])
+        if tag:
+            self.detections[self.cur] = motions
+        else:
+            self.detections[self.nxt] = motions
 
     def loadNext(self):
         self.f_step += 1

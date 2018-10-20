@@ -55,10 +55,13 @@ class GN():
             {'params': self.Ephi.parameters()}],
             lr=lr)
 
-        seqs = [2, 4, 5, 9, 10, 11, 13]
-        lengths = [600, 1050, 837, 525, 654, 900, 750]
+        # seqs = [2, 4, 5, 9, 10, 11, 13]
+        # lengths = [600, 1050, 837, 525, 654, 900, 750]
 
-        for i in xrange(7):
+        seqs = [2, 4, 5, 10]
+        lengths = [600, 1050, 837, 654]
+
+        for i in xrange(len(seqs)):
             self.writer = SummaryWriter()
             # print '     Loading Data...'
             seq = seqs[i]
@@ -150,9 +153,9 @@ class GN():
                             print 'GT:', gt.cpu().data.numpy()[0]
 
                     # Penalize the u to let its value not too big
-                    arpha = torch.mean(torch.abs(u_))
-                    arpha_loss += arpha.item()
-                    arpha.backward(retain_graph=True)
+                    # arpha = torch.mean(torch.abs(u_))
+                    # arpha_loss += arpha.item()
+                    # arpha.backward(retain_graph=True)
 
                     #  The regular loss
                     # print e_.size(), e_
@@ -281,7 +284,7 @@ class GN():
             # print head+step, results,
             step_ed = 0.0
             for (j, k) in results:
-                step_ed += self.train_set.gts[j][k].numpy()[0]
+                step_ed += self.train_set.gts[j][k].item()
             total_ed += step_ed
 
             # print 'Fi'
@@ -318,6 +321,9 @@ if __name__ == '__main__':
 
         t_dir = f_dir + 'all/'
         if not os.path.exists(t_dir):
+            os.mkdir(t_dir)
+        else:
+            deleteDir(t_dir)
             os.mkdir(t_dir)
 
         start = time.time()

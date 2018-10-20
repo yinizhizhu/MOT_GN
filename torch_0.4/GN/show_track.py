@@ -65,15 +65,16 @@ def show():
             w = int(line[4])
             h = int(line[5])
             l = int(line[7])
+            vr = float(line[8])
             img = imgs[index]
             x, y, w, h = fixBB(x, y, w, h, img.size)
             crop = imgs[index].crop([x, y, x + w, y + h])
             img = np.asarray(img)
             crop = np.asarray(crop)
-            print line
-            print part, index, seqL, '%06d' % index, label[l]
-            print w, h
-            print len(crop[0]), len(crop)
+            # print line
+            print part, index, seqL, '%06d' % index, label[l], vr
+            # print w, h
+            # print len(crop[0]), len(crop)
             cv2.imshow('crop', crop)
             cv2.imshow('view', img)
             cv2.waitKey(34)
