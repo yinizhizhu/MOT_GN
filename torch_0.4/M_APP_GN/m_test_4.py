@@ -20,13 +20,19 @@ type = ''
 t_dir = ''  # the dir of the final level
 sequence_dir = ''  # the dir of the training dataset
 
-seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
-lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+# seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
+# lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+#
+# test_seqs = [1, 3, 6, 7, 8, 12, 14]
+# test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
 
-test_seqs = [1, 3, 6, 7, 8, 12, 14]
-test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
+seqs = [9, 11, 13]
+lengths = [525, 900, 750]
 
-tt_tag = 1  # 1 - test, 0 - train
+test_seqs = [9, 11, 13]
+test_lengths = [525, 900, 750]
+
+tt_tag = 0  # 1 - test, 0 - train
 
 
 class GN():
@@ -49,7 +55,7 @@ class GN():
         print '     Loading the model...'
         self.loadModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s/'%type
+        self.out_dir = t_dir + 'motmetrics_%s_4/'%type
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
@@ -59,7 +65,10 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.train_set = DatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index)
+        self.train_set = DatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
+
+        gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
+        self.copyLines(self.seq_index, 1, gt_training, self.tt)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -117,10 +126,11 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = 'all_6'
-        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_13.pth'%name).to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_13.pth'%name).to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/%s/u_13.pth'%name)
+        name = '4_1'
+        tail = 10
+        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%d.pth'%(name, tail)).to(self.device)
+        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%d.pth'%(name, tail)).to(self.device)
+        self.u = torch.load('Results/MOT16/IoU/%s/u_%d.pth'%(name, tail))
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -360,7 +370,7 @@ if __name__ == '__main__':
                 os.mkdir(f_dir)
                 print f_dir, 'does not exist!'
 
-            for i in xrange(7):
+            for i in xrange(len(seqs)):
                 seq_index = seqs[i]
                 tt = lengths[i]
                 print 'The sequence:', seq_index, '- The length of the training data:', tt

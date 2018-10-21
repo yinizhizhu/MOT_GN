@@ -55,10 +55,13 @@ class GN():
             {'params': self.Ephi.parameters()}],
             lr=lr)
 
-        seqs = [2, 4, 5, 9, 10, 11, 13]
-        lengths = [600, 1050, 837, 525, 654, 900, 750]
+        # seqs = [2, 4, 5, 9, 10, 11, 13]
+        # lengths = [600, 1050, 837, 525, 654, 900, 750]
 
-        for i in xrange(7):
+        seqs = [2, 4, 5, 10]
+        lengths = [600, 1050, 837, 654]
+
+        for i in xrange(len(seqs)):
             self.writer = SummaryWriter()
             # print '     Loading Data...'
             seq = seqs[i]
@@ -91,7 +94,7 @@ class GN():
         self.writer.add_graph(self.Ephi, (E, V1, V2, u))
 
     def log(self, t_data):
-        out = open(self.outName, 'w')
+        out = open(self.outName, 'a')
         print >> out, self.criterion
         print >> out, 'lr:{}'.format(self.lr)
         print >> out, self.optimizer.state_dict()
@@ -118,7 +121,7 @@ class GN():
             edge_counter += self.train_set.m * self.train_set.n
             start = time.time()
             show_name = 'LOSS_{}'.format(step)
-            # print '         Step -', step
+            print '         Step -', step
             data_loader = DataLoader(dataset=self.train_set, num_workers=self.numWorker, batch_size=self.batchsize, shuffle=True)
             for epoch in xrange(1, self.nEpochs):
                 num = 0
@@ -135,8 +138,8 @@ class GN():
                     self.optimizer.zero_grad()
 
                     u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
-                    v1 = self.train_set.getApp(1, vs_index).to(self.device)
-                    v2 = self.train_set.getApp(0, vr_index, vs_index).to(self.device)
+                    v1 = self.train_set.getMApp(1, vs_index).to(self.device)
+                    v2 = self.train_set.getMApp(0, vr_index, vs_index).to(self.device)
                     e_ = self.Ephi(e, v1, v2, u_)
 
                     if self.show_process:
@@ -150,9 +153,9 @@ class GN():
                             print 'GT:', gt.cpu().data.numpy()[0]
 
                     # Penalize the u to let its value not too big
-                    arpha = torch.mean(torch.abs(u_))
-                    arpha_loss += arpha.item()
-                    arpha.backward(retain_graph=True)
+                    # arpha = torch.mean(torch.abs(u_))
+                    # arpha_loss += arpha.item()
+                    # arpha.backward(retain_graph=True)
 
                     #  The regular loss
                     # print e_.size(), e_
@@ -180,13 +183,13 @@ class GN():
                         self.step_input = 0
 
                 epoch_loss /= num
-                # print '         Loss of epoch {}: {}.'.format(epoch, epoch_loss)
+                print '         Loss of epoch {}: {}.'.format(epoch, epoch_loss)
                 self.writer.add_scalars(show_name, {'regular': epoch_loss,
                                                'u': arpha_loss/num*self.batchsize}, epoch)
                 if epoch_loss < self.loss_threhold:
                     break
 
-            # print '         Time consuming:{}\n\n'.format(time.time()-start)
+            print '         Time consuming:{}\n\n'.format(time.time()-start)
             self.updateUE()
             self.train_set.showE()
             self.showU()
@@ -218,8 +221,8 @@ class GN():
         for edge in self.train_set:
             e, gt, vs_index, vr_index = edge
             e = e.to(self.device).view(1,-1)
-            v1 = self.train_set.getApp(1, vs_index).to(self.device)
-            v2 = self.train_set.getApp(0, vr_index).to(self.device)
+            v1 = self.train_set.getMApp(1, vs_index).to(self.device)
+            v2 = self.train_set.getMApp(0, vr_index, vs_index).to(self.device)
             e_ = self.Ephi(e, v1, v2, u_)
             self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
 
@@ -264,8 +267,8 @@ class GN():
             for edge in self.train_set.candidates:
                 e, gt, vs_index, vr_index = edge
                 e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getApp(1, vs_index).to(self.device)
-                v2 = self.train_set.getApp(0, vr_index).to(self.device)
+                v1 = self.train_set.getMApp(1, vs_index).to(self.device)
+                v2 = self.train_set.getMApp(0, vr_index, vs_index).to(self.device)
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -281,15 +284,15 @@ class GN():
             # print head+step, results,
             step_ed = 0.0
             for (j, k) in results:
-                step_ed += self.train_set.gts[j][k].numpy()[0]
+                step_ed += self.train_set.gts[j][k].item()
             total_ed += step_ed
 
             # print 'Fi'
-            # print 'Step ACC:{}/{}({}%)'.format(int(step_ed), int(step_gt), step_ed/step_gt*100)
+            print '     ', head+step, 'Step ACC:{}/{}({}%)'.format(int(step_ed), int(step_gt), step_ed/step_gt*100)
             self.train_set.swapFC()
 
         tra_tst = 'training sets' if head == 1 else 'testing sets'
-        # print 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
+        print 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
         out = open(self.outName, 'a')
         print >> out, 'Final {} ACC:{}/{}({}%)'.format(tra_tst, int(total_ed), int(total_gt), total_ed/total_gt*100)
         out.close()
@@ -305,6 +308,7 @@ if __name__ == '__main__':
     try:
         if not os.path.exists('Results/'):
             os.mkdir('Results/')
+
         year = 16
         f_dir = 'Results/MOT%s/' % year
         if not os.path.exists(f_dir):
@@ -318,9 +322,11 @@ if __name__ == '__main__':
         if not os.path.exists(f_dir):
             os.mkdir(f_dir)
 
-
-        t_dir = f_dir + 'all_m_app/'
+        t_dir = f_dir + 'all/'
         if not os.path.exists(t_dir):
+            os.mkdir(t_dir)
+        else:
+            deleteDir(t_dir)
             os.mkdir(t_dir)
 
         start = time.time()

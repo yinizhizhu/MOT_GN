@@ -6,6 +6,12 @@ v_num = 518  # Only take the appearance into consideration, and add velocity whe
 u_num = 100
 e_num = 1 if criterion_s else 2
 
+uphi_n = 256
+ephi_n = 256
+
+# uphi_n = 512
+# ephi_n = 1024
+
 
 class appearance(nn.Module):
     def __init__(self):
@@ -23,15 +29,15 @@ class uphi(nn.Module):
         super(uphi, self).__init__()
         if u_s:
             self.features = nn.Sequential(
-                nn.Linear(u_num+v_num+e_num, 256),
+                nn.Linear(u_num+v_num+e_num, uphi_n),
                 nn.LeakyReLU(inplace=True),
-                nn.Linear(256, u_num),
+                nn.Linear(uphi_n, u_num),
             )
         else:
             self.features = nn.Sequential(
-                nn.Linear(u_num+e_num, 256),
+                nn.Linear(u_num+e_num, uphi_n),
                 nn.LeakyReLU(inplace=True),
-                nn.Linear(256, u_num),
+                nn.Linear(uphi_n, u_num),
             )
 
     def forward(self, e, v, u):
@@ -63,30 +69,30 @@ class ephi(nn.Module):
         if e_s:
             if criterion_s:
                 self.features = nn.Sequential(
-                    nn.Linear(u_num+v_num*2+e_num, 256),
+                    nn.Linear(u_num+v_num*2+e_num, ephi_n),
                     nn.LeakyReLU(inplace=True),
-                    nn.Linear(256, e_num),
+                    nn.Linear(ephi_n, e_num),
                     nn.Sigmoid(),
                 )
             else:
                 self.features = nn.Sequential(
-                    nn.Linear(u_num+v_num*2+e_num, 256),
+                    nn.Linear(u_num+v_num*2+e_num, ephi_n),
                     nn.LeakyReLU(inplace=True),
-                    nn.Linear(256, e_num),
+                    nn.Linear(ephi_n, e_num),
                 )
         else:
             if criterion_s:
                 self.features = nn.Sequential(
-                    nn.Linear(u_num+e_num, 256),
+                    nn.Linear(u_num+e_num, ephi_n),
                     nn.LeakyReLU(inplace=True),
-                    nn.Linear(256, e_num),
+                    nn.Linear(ephi_n, e_num),
                     nn.Sigmoid(),
                 )
             else:
                 self.features = nn.Sequential(
-                    nn.Linear(u_num+e_num, 1024),
+                    nn.Linear(u_num+e_num, ephi_n),
                     nn.LeakyReLU(inplace=True),
-                    nn.Linear(1024, e_num),
+                    nn.Linear(ephi_n, e_num),
                 )
 
     def forward(self, e, v1, v2, u):

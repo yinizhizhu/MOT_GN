@@ -1,12 +1,9 @@
 import torch.utils.data as data
-import cv2, random, torch, shutil, os
-import numpy as np
+import random, torch, shutil, os, gc
 from math import *
 from PIL import Image
-from m_mot_model import appearance
 import torch.nn.functional as F
 from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_dis
-from torchvision.transforms import ToTensor
 
 
 def load_img(filepath):
@@ -15,17 +12,15 @@ def load_img(filepath):
 
 
 class DatasetFromFolder(data.Dataset):
-    def __init__(self, part, cuda=True, show=0):
+    def __init__(self, part, part_I, cuda=True):
         super(DatasetFromFolder, self).__init__()
         self.dir = part
         self.cleanPath(part)
-        self.img_dir = part + '/img1/'
+        self.img_dir = part_I + '/img1/'
         self.gt_dir = part + '/gt/'
         self.det_dir = part + '/det/'
         self.device = torch.device("cuda" if cuda else "cpu")
-        self.show = show
 
-        self.loadAModel()
         self.getSeqL()
         if test_gt_det:
             self.readBBx_gt()
@@ -39,11 +34,6 @@ class DatasetFromFolder(data.Dataset):
         if os.path.exists(part+'/dets/'):
             shutil.rmtree(part+'/dets/')
 
-    def loadAModel(self):
-        self.Appearance = torch.load('../MOT/Fine-tune_GPU_5_3_60_aug/appearance_19.pth')
-        self.Appearance.to(self.device)
-        self.Appearance.eval()  # fixing the BatchN layer
-
     def getSeqL(self):
         # get the length of the sequence
         info = self.dir+'/seqinfo.ini'
@@ -56,13 +46,23 @@ class DatasetFromFolder(data.Dataset):
         f.close()
         # print 'The length of the sequence:', self.seqL
 
+    def fixBB(self, x, y, w, h, size):
+        width, height = size
+        w = min(w+x, width)
+        h = min(h+y, height)
+        x = max(x, 0)
+        y = max(y, 0)
+        w -= x
+        h -= y
+        return x, y, w, h
+
     def readBBx_gt(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
+        bbxs = [[] for i in xrange(self.seqL + 1)]
         imgs = [None for i in xrange(self.seqL + 1)]
-        for i in xrange(1, self.seqL+1):
-            img = load_img(self.img_dir + '%06d.jpg' % i)  # initial with loading the first frame
-            imgs[i] = img
+        for i in xrange(1, self.seqL + 1):
+            imgs[i] = load_img(self.img_dir+'%06d.jpg'%i)
         gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
         pre = -1
@@ -81,24 +81,25 @@ class DatasetFromFolder(data.Dataset):
 
                 pre = id
                 img = imgs[index]
+                x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 width, height = float(img.size[0]), float(img.size[1])
-                self.bbx[index].append([x, y, w, h, id, conf_score, vr, width, height])
+                self.bbx[index].append([x/width, y/height, w/width, h/height, id, conf_score, vr])
+                bbxs[index].append([x, y, w, h, id, conf_score, vr])
         f.close()
 
         gt_out = open(self.gt_dir + 'gt_det.txt', 'w')
         for index in xrange(1, self.seqL+1):
-            for bbx in self.bbx[index]:
-                x,y, w, h, id, conf_score, vr, width, heigth = bbx
-                print >> gt_out, '%d,%d,%d,%d,%d,%d,%f,-1,-1,-1'%(index, id, x, y, w, h, conf_score)
+            for bbx in bbxs[index]:
+                x,y, w, h, id, conf_score, vr = bbx
+                print >> gt_out, '%d,-1,%d,%d,%d,%d,%f,-1,-1,-1'%(index, x, y, w, h, conf_score)
         gt_out.close()
 
     def readBBx_det(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
         imgs = [None for i in xrange(self.seqL + 1)]
-        for i in xrange(1, self.seqL+1):
-            img = load_img(self.img_dir + '%06d.jpg' % i)  # initial with loading the first frame
-            imgs[i] = img
+        for i in xrange(1, self.seqL + 1):
+            imgs[i] = load_img(self.img_dir+'%06d.jpg'%i)
         det = self.det_dir + 'det.txt'
         f = open(det, 'r')
         for line in f.readlines():
@@ -109,15 +110,13 @@ class DatasetFromFolder(data.Dataset):
             w, h = float(line[4]), float(line[5])
             conf_score = float(line[6])
             if conf_score >= tau_conf_score:
-                img = imgs[index]
+                img = imgs[i]
+                x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 width, height = float(img.size[0]), float(img.size[1])
-                self.bbx[index].append([x, y, w, h, conf_score, width, height])
+                self.bbx[index].append([x/width, y/height, w/width, h/height, id, conf_score])
         f.close()
 
     def initBuffer(self):
-        if self.show:
-            cv2.namedWindow('view', flags=0)
-            cv2.namedWindow('crop', flags=0)
         self.f_step = 1  # the index of next frame in the process
         self.cur = 0     # the index of current frame in the detections
         self.nxt = 1     # the index of next frame in the detections
@@ -135,16 +134,6 @@ class DatasetFromFolder(data.Dataset):
         if counter > 0:
             print '           Empty in setBuffer:', counter
         return counter
-
-    def fixBB(self, x, y, w, h, size):
-        width, height = size
-        w = min(w+x, width)
-        h = min(h+y, height)
-        x = max(x, 0)
-        y = max(y, 0)
-        w -= x
-        h -= y
-        return x, y, w, h
 
     def IOU(self, Reframe, GTframe):
         """
@@ -184,17 +173,6 @@ class DatasetFromFolder(data.Dataset):
             ratio = Area * 1. / (Area1 + Area2 - Area)
         return ratio
 
-    def getMN(self, m, n):
-        ans = [[None for i in xrange(n)] for i in xrange(m)]
-        for i in xrange(m):
-            Reframe = self.bbx[self.f_step-self.gap][i]
-            for j in xrange(n):
-                GTframe = self.bbx[self.f_step][j]
-                p = self.IOU(Reframe, GTframe)
-                # 1 - match, 0 - mismatch
-                ans[i][j] = torch.FloatTensor([1 - p, p])
-        return ans
-
     def aggregate(self, set):
         if len(set):
             rho = sum(set)
@@ -220,28 +198,72 @@ class DatasetFromFolder(data.Dataset):
                 ret[i][j] = self.distance(bbx1, self.bbx[self.f_step][j])
         return ret
 
-    def getFeature(self, tag, index, pre_index=None, t=None):
+    def getMotion(self, tag, index, pre_index=None, t=None):
         cur = self.cur if tag else self.nxt
         if tag == 0:
             self.updateVelocity(pre_index, index, t)
-        return self.detections[cur][index][0]
+            return self.detections[cur][index][0][pre_index]
+        return self.detections[cur][index][0][0]
 
-    def moveFeature(self, index):
-        self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx
-        self.detections[self.nxt].append(self.detections[self.cur][index])   # add the appearance
+    def moveMotion(self, index):
+        self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx: x, y, w, h, id, conf_score
+        self.detections[self.nxt].append(self.detections[self.cur][index])   # add the motion: [[x, y, w, h, v_x, v_y], id]
+
+    def cleanEdge(self):
+        con = []
+        index = 0
+        for det in self.detections[self.nxt]:
+            motion, id = det
+            x = motion[0][0].item() + motion[0][4].item()
+            y = motion[0][1].item() + motion[0][5].item()
+            if (x < 0.0 or x > 1.0) or (y < 0.0 or y > 1.0):
+                con.append(index)
+            index += 1
+
+        for i in xrange(len(con)-1, -1, -1):
+            index = con[i]
+            del self.bbx[self.f_step][index]
+            del self.detections[self.nxt][index]
+        return con
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
 
-    def resnet34(self, img):
-        bbx = ToTensor()(img)
-        bbx = bbx.to(self.device)
-        bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
-        ret = self.Appearance(bbx)
-        ret = ret.view(1, -1)
-        return ret
+    def updateVelocity(self, i, j, t=None, tag=True):
+        v_x = 0.0
+        v_y = 0.0
+        if i != -1:
+            if test_gt_det:
+                x1, y1, w1, h1, id1, conf_score1, vr1 = self.bbx[self.f_step-self.gap][i]
+                x2, y2, w2, h2, id2, conf_score2, vr2 = self.bbx[self.f_step][j]
+            else:
+                x1, y1, w1, h1, id1, conf_score1 = self.bbx[self.f_step-self.gap][i]
+                x2, y2, w2, h2, id2, conf_score2 = self.bbx[self.f_step][j]
+            v_x = (x2+w2/2 - (x1+w1/2))/t
+            v_y = (y2+h2/2 - (y1+h1/2))/t
+        if tag:
+            # print 'm=%d,n=%d; i=%d, j=%d'%(len(self.detections[self.cur]), len(self.detections[self.nxt]), i, j)
+            self.detections[self.nxt][j][0][i][0][4] = v_x
+            self.detections[self.nxt][j][0][i][0][5] = v_y
+        else:
+            cur_m = self.detections[self.nxt][j][0][0]
+            cur_m[0][4] = v_x
+            cur_m[0][5] = v_y
+            self.detections[self.nxt][j][0] = [cur_m]
+
+    def getMN(self, m, n):
+        cur = self.f_step - self.gap
+        ans = [[None for i in xrange(n)] for i in xrange(m)]
+        for i in xrange(m):
+            Reframe = self.bbx[cur][i]
+            for j in xrange(n):
+                GTframe = self.bbx[self.f_step][j]
+                p = self.IOU(Reframe, GTframe)
+                # 1 - match, 0 - mismatch
+                ans[i][j] = torch.FloatTensor([1 - p, p])
+        return ans
 
     def feature(self, tag=0):
         '''
@@ -250,70 +272,26 @@ class DatasetFromFolder(data.Dataset):
         :param show: 1 - show the cropped & src image
         :return: None
         '''
-        apps = []
+        motions = []
         with torch.no_grad():
-            bbx_container = []
-            img = load_img(self.img_dir + '%06d.jpg' % self.f_step)  # initial with loading the first frame
+            m = 1 if tag else self.m
             for bbx in self.bbx[self.f_step]:
                 """
                 Bellow Conditions needed be taken into consideration:
                     x, y < 0 and x+w > W, y+h > H
                 """
                 if test_gt_det:
-                    x, y, w, h, id, conf_score, vr, width, height = bbx
+                    x, y, w, h, id, conf_score, vr = bbx
                 else:
-                    x, y, w, h, conf_score, width, height = bbx
-                x, y, w, h = self.fixBB(x, y, w, h, img.size)
-                if test_gt_det:
-                    bbx_container.append([x, y, w, h, id, conf_score, vr, width, height])
-                else:
-                    bbx_container.append([x, y, w, h, conf_score, width, height])
-                motion = torch.FloatTensor([[(x+w/2)/width, (y+h/2)/height, w/width, h/height, 0.0, 0.0]]).to(self.device)
-
-                crop = img.crop([int(x), int(y), int(x + w), int(y + h)])
-                bbx = crop.resize((224, 224), Image.ANTIALIAS)
-                ret = self.resnet34(bbx)
-                app = ret.data
-                apps.append([torch.cat((motion, app), dim=1), conf_score])
-
-                if self.show:
-                    img = np.asarray(img)
-                    crop = np.asarray(crop)
-                    if test_gt_det:
-                        print '%06d'%self.f_step, id, vr, '***',
-                    else:
-                        print '%06d'%self.f_step, conf_score, vr, '***',
-                    print w, h, '-',
-                    print len(crop[0]), len(crop)
-                    cv2.imshow('crop', crop)
-                    cv2.imshow('view', img)
-                    cv2.waitKey(34)
-                    raw_input('Continue?')
-                    # cv2.waitKey(34)
-            self.bbx[self.f_step] = bbx_container
+                    x, y, w, h, id, conf_score = bbx
+                cur_m = []
+                for i in xrange(m):
+                    cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]))
+                motions.append([cur_m, id])
         if tag:
-            self.detections[self.cur] = apps
+            self.detections[self.cur] = motions
         else:
-            self.detections[self.nxt] = apps
-
-    def updateVelocity(self, i, j, t=None):
-        v_x = 0.0
-        v_y = 0.0
-        if i >= 0:
-            if test_gt_det:
-                x1, y1, w1, h1, id1, conf_score1, vr1, width1, height1 = self.bbx[self.f_step-self.gap][i]
-                x2, y2, w2, h2, id2, conf_score2, vr2, width2, height2 = self.bbx[self.f_step][j]
-            else:
-                x1, y1, w1, h1, conf_score1, width1, height1 = self.bbx[self.f_step-self.gap][i]
-                x2, y2, w2, h2, conf_score2, width2, height2 = self.bbx[self.f_step][j]
-            v_x = (x2+w2/2 - (x1+w1/2))/t/width1
-            v_y = (y2+h2/2 - (y1+h1/2))/t/height1
-        self.detections[self.nxt][j][0][0][4] = v_x
-        self.detections[self.nxt][j][0][0][5] = v_y
-
-    def getVelocity(self, matches):
-        for (i, j) in matches:
-            self.updateVelocity(i, j, 1)
+            self.detections[self.nxt] = motions
 
     def loadNext(self):
         self.m = len(self.detections[self.cur])
@@ -347,7 +325,7 @@ class DatasetFromFolder(data.Dataset):
         for i in xrange(2):
             n = len(self.detections[i])
             for j in xrange(n):
-                v = self.detections[i][j][0]
+                v = self.detections[i][j][0][0]
                 vs.append(v)
 
         self.E = self.aggregate(es).to(self.device).view(1,-1)

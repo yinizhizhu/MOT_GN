@@ -183,7 +183,7 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = 'all_m_app'
+        name = 'all_4'
         self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_13.pth'%name).to(self.device)
         self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_13.pth'%name).to(self.device)
         self.u = torch.load('Results/MOT16/IoU/%s/u_13.pth'%name)
@@ -253,8 +253,8 @@ class GN():
             for edge in self.train_set.candidates:
                 e, vs_index, vr_index = edge
                 e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getFeature(1, vs_index).to(self.device)
-                v2 = self.train_set.getFeature(0, vr_index, vs_index, 1).to(self.device)
+                v1 = self.train_set.getMotion(1, vs_index).to(self.device)
+                v2 = self.train_set.getMotion(0, vr_index, vs_index, 1).to(self.device)
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -266,7 +266,7 @@ class GN():
             # for j in ret:
             #     print j
 
-            results = []
+            results = set(j for j in xrange(n))
             for i in xrange(m):
                 a_attrs = line_con[self.cur][i]
                 for j in xrange(n):
@@ -274,14 +274,16 @@ class GN():
                     cost = ret[i][j]
                     # print a_attrs[1], line_con[self.nxt][j][1]
                     if a_attrs[1] == line_con[self.nxt][j][1]:
-                        results.append([i, j])
+                        self.train_set.updateVelocity(i, j, 1)
+                        results.remove(j)
                         index = 0
                     self.ctau[index][0] = min(self.ctau[index][0], cost)
                     self.ctau[index][1] = max(self.ctau[index][1], cost)
                     self.ctau[index][2] += cost
                     self.ctau[index][3] += 1
 
-            self.train_set.getVelocity(results)
+            for j in results:
+                self.train_set.updateVelocity(-1, j)
 
             line_con[self.cur] = []
             # print head+step, results

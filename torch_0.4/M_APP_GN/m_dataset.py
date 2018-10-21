@@ -2,9 +2,9 @@ import torch.utils.data as data
 import random, torch, shutil, os
 from PIL import Image
 import torch.nn.functional as F
-from m_global_set import edge_initial, overlap
 from m_mot_model import appearance
 from torchvision.transforms import ToTensor
+from m_global_set import edge_initial, overlap,app_fine_tune, fine_tune_dir
 
 
 def load_img(filepath):
@@ -20,13 +20,18 @@ class DatasetFromFolder(data.Dataset):
         self.img_dir = part + '/img1/'
         self.gt_dir = part + '/gt/'
         self.det_dir = part + '/det/'
+
         self.outName = outName
+        out = open(self.outName, 'w')
+        out.close()
+
         self.device = torch.device("cuda" if cuda else "cpu")
 
         self.loadAModel()
         self.getSeqL()
         self.readBBx()
         self.initBuffer()
+        print '     Data loader is already!'
 
     def cleanPath(self, part):
         if os.path.exists(part+'/gts/'):
@@ -35,7 +40,10 @@ class DatasetFromFolder(data.Dataset):
             shutil.rmtree(part+'/dets/')
 
     def loadAModel(self):
-        self.Appearance = torch.load('../MOT/Fine-tune_GPU_5_3_60_aug/appearance_19.pth')
+        if app_fine_tune:
+            self.Appearance = torch.load(fine_tune_dir)
+        else:
+            self.Appearance = appearance()
         self.Appearance.to(self.device)
         self.Appearance.eval()  # fixing the BatchN layer
 
@@ -51,35 +59,47 @@ class DatasetFromFolder(data.Dataset):
         f.close()
         print '     The length of the sequence:', self.seqL
 
-    def generator(self, bbx):
-        x, y, w, h, id, conf_score, vr, width, height = bbx
-        tmp = overlap*2/(1+overlap)
-        n_w = random.uniform(tmp*w, w)
-        n_h = tmp*w*float(h)/n_w
+    def fixBB(self, x, y, w, h, size):
+        width, height = size
+        w = min(w+x, width)
+        h = min(h+y, height)
+        x = max(x, 0)
+        y = max(y, 0)
+        w -= x
+        h -= y
+        return x, y, w, h
 
-        direction = random.randint(1, 4)
-        if direction == 1:
-            x = x + n_w - w
-            y = y + n_h - h
-        elif direction == 2:
-            x = x - n_w + w
-            y = y + n_h - h
-        elif direction == 3:
-            x = x + n_w - w
-            y = y - n_h + h
-        else:
-            x = x - n_w + w
-            y = y - n_h + h
-        ans = [x, y, w, h, id, conf_score, vr, width, height]
-        return ans
+    def generator(self, bbx):
+        if random.randint(0, 1):
+            x, y, w, h = bbx
+            tmp = overlap*2/(1+overlap)
+            n_w = random.uniform(tmp*w, w)
+            n_h = tmp*w*h/n_w
+
+            direction = random.randint(1, 4)
+            if direction == 1:
+                x = x + n_w - w
+                y = y + n_h - h
+            elif direction == 2:
+                x = x - n_w + w
+                y = y + n_h - h
+            elif direction == 3:
+                x = x + n_w - w
+                y = y - n_h + h
+            else:
+                x = x - n_w + w
+                y = y - n_h + h
+            ans = [x, y, w, h]
+            return ans
+        return bbx
 
     def readBBx(self):
         # get the gt
         self.bbx = [[] for i in xrange(self.seqL + 1)]
+        self.bbxApp = [[] for i in xrange(self.seqL + 1)]
         imgs = [None for i in xrange(self.seqL + 1)]
         for i in xrange(1, self.seqL+1):
-            img = load_img(self.img_dir + '%06d.jpg' % i)  # initial with loading the first frame
-            imgs[i] = img
+            imgs[i] = load_img(self.img_dir+'%06d.jpg'%i)
         gt = self.gt_dir + 'gt.txt'
         f = open(gt, 'r')
         pre = -1
@@ -98,9 +118,11 @@ class DatasetFromFolder(data.Dataset):
 
                 pre = id
                 img = imgs[index]
+                x, y, w, h = self.generator([x, y, w, h])
+                x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 width, height = float(img.size[0]), float(img.size[1])
-                tmp_bbx = self.generator([x, y, w, h, id, conf_score, vr, width, height])
-                self.bbx[index].append(tmp_bbx)
+                self.bbx[index].append([x/width, y/height, w/width, h/height, id, vr])
+                self.bbxApp[index].append([int(x), int(y), int(w), int(h)])
         f.close()
 
     def initBuffer(self):
@@ -113,16 +135,6 @@ class DatasetFromFolder(data.Dataset):
     def setBuffer(self, f):
         self.f_step = f
         self.feature(1)
-
-    def fixBB(self, x, y, w, h, size):
-        width, height = size
-        w = min(w+x, width)
-        h = min(h+y, height)
-        x = max(x, 0)
-        y = max(y, 0)
-        w -= x
-        h -= y
-        return x, y, w, h
 
     def IOU(self, Reframe, GTframe):
         """
@@ -162,11 +174,89 @@ class DatasetFromFolder(data.Dataset):
             ratio = Area * 1. / (Area1 + Area2 - Area)
         return ratio
 
-    def getMN(self, m, n):
-        ans = [[None for i in xrange(n)] for i in xrange(m)]
-        for i in xrange(m):
-            Reframe = self.bbx[self.f_step-1][i]
-            for j in xrange(n):
+    def swapFC(self):
+        self.getVelocity()
+        self.cur = self.cur ^ self.nxt
+        self.nxt = self.cur ^ self.nxt
+        self.cur = self.cur ^ self.nxt
+
+    def getMApp(self, tag, index, pre_index=None):
+        cur = self.cur if tag else self.nxt
+        if torch.is_tensor(index):
+            n = index.numel()
+            if n < 0:
+                print 'The tensor is empyt!'
+                return None
+            if tag == 0:
+                for k in xrange(n):
+                    i, j = pre_index[k].item(), index[k].item()
+                    self.updateVelocity(i, j)
+                x, y = index[0], pre_index[0]
+                if n == 1:
+                    return torch.cat((self.detections[cur][x][0][y], self.detections[cur][x][2]), dim=1)
+                x2, y2 = index[1], pre_index[1]
+                ans = torch.cat((torch.cat((self.detections[cur][x][0][y], self.detections[cur][x][2]), dim=1),
+                                 torch.cat((self.detections[cur][x2][0][y2], self.detections[cur][x2][2]), dim=1)), dim=0)
+                for i in xrange(2, n):
+                    x, y = index[i], pre_index[i]
+                    ans = torch.cat((ans,
+                                     torch.cat((self.detections[cur][x][0][y], self.detections[cur][x][2]), dim=1)), dim=0)
+                return ans
+            x = index[0]
+            if n == 1:
+                return torch.cat((self.detections[cur][x][0][0], self.detections[cur][x][2]), dim=1)
+            x2 = index[1]
+            ans = torch.cat((torch.cat((self.detections[cur][x][0][0], self.detections[cur][x][2]), dim=1),
+                             torch.cat((self.detections[cur][x2][0][0], self.detections[cur][x2][2]), dim=1)), dim=0)
+            for i in xrange(2, n):
+                x = index[i]
+                ans = torch.cat((ans,
+                                 torch.cat((self.detections[cur][x][0][0], self.detections[cur][x][2]), dim=1)), dim=0)
+            return ans
+        if tag == 0:
+            self.updateVelocity(pre_index, index)
+            return self.detections[cur][index][0][pre_index]
+        return self.detections[cur][index][0][0]
+
+    def updateVelocity(self, i, j, tag=True):
+        '''
+        :param i: cur_index, -1 - birth
+        :param j: nxt_index
+        :param tag: True - update the velocity in the next frame, False - Write down the final velocity
+        :return:
+        '''
+        v_x, v_y = 0.0, 0.0
+        if i >= 0:
+            x1, y1, w1, h1, id1, vr1 = self.bbx[self.f_step-1][i]
+            x2, y2, w2, h2, id2, vr2 = self.bbx[self.f_step][j]
+            v_x = x2+w2/2 - (x1+w1/2)
+            v_y = y2+h2/2 - (y1+h1/2)
+        if tag:
+            self.detections[self.nxt][j][0][i][0][4] = v_x
+            self.detections[self.nxt][j][0][i][0][5] = v_y
+        else:
+            cur_m = self.detections[self.nxt][j][0][0]
+            cur_m[0][4] = v_x
+            cur_m[0][5] = v_y
+            self.detections[self.nxt][j][0] = [cur_m]
+
+    def getVelocity(self):
+        remaining = set(j for j in xrange(self.n))
+        # For the connection between two detections
+        for (i, j) in self.matches:
+            remaining.remove(j)
+            self.updateVelocity(i, j, False)
+
+        # For the birth of objects
+        for j in remaining:
+            self.updateVelocity(-1, j, False)
+
+    def getMN(self):
+        cur = self.f_step - 1
+        ans = [[None for j in xrange(self.n)] for i in xrange(self.m)]
+        for i in xrange(self.m):
+            Reframe = self.bbx[cur][i]
+            for j in xrange(self.n):
                 GTframe = self.bbx[self.f_step][j]
                 p = self.IOU(Reframe, GTframe)
                 # 1 - match, 0 - mismatch
@@ -180,88 +270,11 @@ class DatasetFromFolder(data.Dataset):
         print '     The set is empty!'
         return None
 
-    def getApp(self, tag, index, pre_index=None):
-        cur = self.cur if tag else self.nxt
-        if torch.is_tensor(index):
-            n = index.numel()
-            if n < 0:
-                print 'The tensor is empyt!'
-                return None
-            if tag == 0:
-                for k in xrange(n):
-                    i, j = pre_index[k].item(), index[k].item()
-                    self.updateVelocity(i, j)
-            if n == 1:
-                return self.detections[cur][index[0]][0]
-            ans = torch.cat((self.detections[cur][index[0]][0], self.detections[cur][index[1]][0]), dim=0)
-            for i in xrange(2, n):
-                ans = torch.cat((ans, self.detections[cur][index[i]][0]), dim=0)
-            return ans
-        return self.detections[cur][index][0]
-
-    def swapFC(self):
-        self.getVelocity()
-        self.cur = self.cur ^ self.nxt
-        self.nxt = self.cur ^ self.nxt
-        self.cur = self.cur ^ self.nxt
-
-    def resnet34(self, img):
-        bbx = ToTensor()(img)
-        bbx = bbx.to(self.device)
-        bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
-        ret = self.Appearance(bbx)
-        ret = ret.view(1, -1)
-        return ret
-
-    def feature(self, tag=0):
-        '''
-        Getting the appearance of the detections in current frame
-        :param tag: 1 - initiating
-        :return: None
-        '''
-        apps = []
-        with torch.no_grad():
-            bbx_container = []
-            img = load_img(self.img_dir + '%06d.jpg' % self.f_step)  # initial with loading the first frame
-            for bbx in self.bbx[self.f_step]:
-                """
-                Condition needed be taken into consideration:
-                    x, y < 0 and x+w > W, y+h > H
-                """
-                x, y, w, h, id, conf_score, vr, width, height = bbx
-                x, y, w, h = self.fixBB(x, y, w, h, img.size)
-                bbx_container.append([x, y, w, h, id, conf_score, vr, width, height])
-                motion = torch.FloatTensor([[(x+w/2)/width, (y+h/2)/height, w/width, h/height, 0.0, 0.0]]).to(self.device)
-
-                crop = img.crop([int(x), int(y), int(x + w), int(y + h)])
-                bbx = crop.resize((224, 224), Image.ANTIALIAS)
-                ret = self.resnet34(bbx)
-                app = ret.data
-                apps.append([torch.cat((motion, app), dim=1), conf_score, vr])
-
-            self.bbx[self.f_step] = bbx_container
-        if tag:
-            self.detections[self.cur] = apps
-        else:
-            self.detections[self.nxt] = apps
-
-    def updateVelocity(self, i, j):
-        x1, y1, w1, h1, id1, conf_score1, vr1, width1, height1 = self.bbx[self.f_step-1][i]
-        x2, y2, w2, h2, id2, conf_score2, vr2, width2, height2 = self.bbx[self.f_step][j]
-        v_x = x2+w2/2 - (x1+w1/2)
-        v_y = y2+h2/2 - (y1+h1/2)
-        self.detections[self.nxt][j][0][0][4] = v_x/width1
-        self.detections[self.nxt][j][0][0][5] = v_y/height1
-
-    def getVelocity(self):
-        for (i, j) in self.matches:
-            self.updateVelocity(i, j)
-
     def initEC(self):
         self.m = len(self.detections[self.cur])
         self.n = len(self.detections[self.nxt])
         self.candidates = []
-        self.edges = self.getMN(self.m, self.n)
+        self.edges = self.getMN()
         self.matches = []
         self.gts = [[None for j in xrange(self.n)] for i in xrange(self.m)]
         self.step_gt = 0.0
@@ -289,11 +302,60 @@ class DatasetFromFolder(data.Dataset):
         for i in xrange(2):
             n = len(self.detections[i])
             for j in xrange(n):
-                v = self.detections[i][j][0]
+                # print self.detections[i][j][0][0]
+                # print self.detections[i][j][1]
+                # print self.detections[i][j][2]
+                v = torch.cat((self.detections[i][j][0][0], self.detections[i][j][2]), dim=1)
                 vs.append(v)
 
         self.E = self.aggregate(es).to(self.device).view(1,-1)
         self.V = self.aggregate(vs).to(self.device)
+
+    def resnet34(self, img):
+        bbx = ToTensor()(img)
+        bbx = bbx.to(self.device)
+        bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
+        ret = self.Appearance(bbx)
+        ret = ret.view(1, -1)
+        return ret
+
+    def feature(self, tag=0):
+        '''
+        Getting the appearance of the detections in current frame
+        :param tag: 1 - initiating
+        :return: None
+        '''
+        m_apps = []
+        with torch.no_grad():
+            j = 0
+            m = 1 if tag else len(self.bbx[self.f_step-1])
+            img = load_img(self.img_dir+'%06d.jpg'%self.f_step)
+            for bbx in self.bbx[self.f_step]:
+                """
+                Condition needed be taken into consideration:
+                    x, y < 0 and x+w > W, y+h > H
+                """
+                x, y, w, h, id, vr = bbx
+                x += w/2
+                y += h/2
+                cur_m = []
+                for i in xrange(m):
+                    cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]))
+
+                x, y, w, h = self.bbxApp[self.f_step][j]
+                crop = img.crop([x, y, x + w, y + h])
+                bbx = crop.resize((224, 224), Image.ANTIALIAS)
+                ret = self.resnet34(bbx)
+                app = ret.data
+                print ret
+                print app
+                raw_input('Continue?')
+                m_apps.append([cur_m, id, app])
+                j += 1
+        if tag:
+            self.detections[self.cur] = m_apps
+        else:
+            self.detections[self.nxt] = m_apps
 
     def loadNext(self):
         self.f_step += 1
