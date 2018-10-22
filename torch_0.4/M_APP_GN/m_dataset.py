@@ -215,8 +215,8 @@ class DatasetFromFolder(data.Dataset):
             return ans
         if tag == 0:
             self.updateVelocity(pre_index, index)
-            return self.detections[cur][index][0][pre_index]
-        return self.detections[cur][index][0][0]
+            return torch.cat((self.detections[cur][index][0][pre_index], self.detections[cur][index][2]), dim=1)
+        return torch.cat((self.detections[cur][index][0][0], self.detections[cur][index][2]), dim=1)
 
     def updateVelocity(self, i, j, tag=True):
         '''
@@ -340,16 +340,13 @@ class DatasetFromFolder(data.Dataset):
                 y += h/2
                 cur_m = []
                 for i in xrange(m):
-                    cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]))
+                    cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
 
                 x, y, w, h = self.bbxApp[self.f_step][j]
                 crop = img.crop([x, y, x + w, y + h])
                 bbx = crop.resize((224, 224), Image.ANTIALIAS)
                 ret = self.resnet34(bbx)
                 app = ret.data
-                print ret
-                print app
-                raw_input('Continue?')
                 m_apps.append([cur_m, id, app])
                 j += 1
         if tag:

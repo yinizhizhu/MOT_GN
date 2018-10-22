@@ -127,8 +127,8 @@ class GN():
                 num = 0
                 epoch_loss = 0.0
                 arpha_loss = 0.0
-                for iteration in enumerate(data_loader, 1):
-                    index, (e, gt, vs_index, vr_index) = iteration
+                for batch_i, samples in enumerate(data_loader):
+                    e, gt, vs_index, vr_index = samples
                     # print '*'*36
                     # print e.size()
                     # print gt.size()
@@ -153,9 +153,9 @@ class GN():
                             print 'GT:', gt.cpu().data.numpy()[0]
 
                     # Penalize the u to let its value not too big
-                    # arpha = torch.mean(torch.abs(u_))
-                    # arpha_loss += arpha.item()
-                    # arpha.backward(retain_graph=True)
+                    arpha = torch.mean(torch.abs(u_))
+                    arpha_loss += arpha.item()
+                    arpha.backward(retain_graph=True)
 
                     #  The regular loss
                     # print e_.size(), e_
