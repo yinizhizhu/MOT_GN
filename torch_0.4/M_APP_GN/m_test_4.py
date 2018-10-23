@@ -3,7 +3,7 @@ import numpy as np
 from m_mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil, gc
+import time, os, shutil
 from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
 from m_test_dataset import DatasetFromFolder
 
@@ -55,7 +55,7 @@ class GN():
         print '     Loading the model...'
         self.loadModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_4/'%type
+        self.out_dir = t_dir + 'motmetrics_%s_4_1/'%type
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
@@ -126,7 +126,7 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = '4_1'
+        name = 'all_4'
         tail = 10
         self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%d.pth'%(name, tail)).to(self.device)
         self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%d.pth'%(name, tail)).to(self.device)
@@ -247,8 +247,8 @@ class GN():
                 if ret[vs_index][vr_index] == 1.0:
                     continue
                 e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getMotion(1, vs_index).to(self.device)
-                v2 = self.train_set.getMotion(0, vr_index, vs_index, line_con[self.cur][vs_index][-1]).to(self.device)
+                v1 = self.train_set.getMApp(1, vs_index).to(self.device)
+                v2 = self.train_set.getMApp(0, vr_index, vs_index, line_con[self.cur][vs_index][-1]).to(self.device)
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -319,7 +319,7 @@ class GN():
                         attrs[-1] += t_gap
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
-                        self.train_set.moveMotion(index)
+                        self.train_set.moveMApp(index)
                     index += 1
                 index += 1
             while index < m:
@@ -329,7 +329,7 @@ class GN():
                     attrs[-1] += t_gap
                     line_con[self.nxt].append(attrs)
                     id_con[self.nxt].append(id_con[self.cur][index])
-                    self.train_set.moveMotion(index)
+                    self.train_set.moveMApp(index)
                 index += 1
 
             # con = self.train_set.cleanEdge()

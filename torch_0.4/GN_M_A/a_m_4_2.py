@@ -308,7 +308,7 @@ class GN():
                 m_tmp = F.softmax(m_e_)
                 m_tmp = m_tmp.cpu().data.numpy()[0]
 
-                ret[a_vs_index][a_vr_index] = float(a_tmp[0])*self.alpha + float(m_tmp[0])*(1-self.alpha)
+                ret[a_vs_index][a_vr_index] = float(a_tmp[0])*self.alpha + float(m_tmp[0])
 
             # self.a_train_set.showE(outFile)
             # self.m_train_set.showE(outFile)
@@ -321,7 +321,7 @@ class GN():
             look_up = set(j for j in xrange(a_n))
             for (i, j) in results:
                 # print (i,j)
-                if ret[i][j] >= tau_threshold:
+                if ret[i][j] >= tau_threshold+ALPHA_TAG:
                     continue
                 look_up.remove(j)
                 self.m_train_set.updateVelocity(i, j, line_con[self.cur][i][-1], False)
@@ -413,7 +413,7 @@ class GN():
 if __name__ == '__main__':
     try:
     	start_x = time.time()
-    	for x in xrange(1, 4):
+    	for x in xrange(2, 3):
        		ALPHA_TAG = x
     		start_a = time.time()
     		for a in xrange(1, 10):

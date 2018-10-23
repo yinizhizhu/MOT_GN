@@ -413,7 +413,7 @@ class GN():
 if __name__ == '__main__':
     try:
     	start_x = time.time()
-    	for x in xrange(1, 4):
+    	for x in xrange(1, 2):
        		ALPHA_TAG = x
     		start_a = time.time()
     		for a in xrange(1, 10):

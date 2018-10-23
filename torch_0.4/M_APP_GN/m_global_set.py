@@ -25,7 +25,7 @@ f_gap = 5   # max frame number for recovering
 show_recovering = 0  # 1 - 11, 0 - 10
 
 app_fine_tune = 1   # 1 - fine-tuned the appearance model, 0 - pre-trained appearance model
-fine_tune_dir = '../MOT/Fine-tune_GPU_5_3_60_aug_r/appearance_19.pth'
+fine_tune_dir = '../MOT/Fine-tune_GPU_5_3_60_aug/appearance_19.pth'
 
 overlap = 0.85
 
