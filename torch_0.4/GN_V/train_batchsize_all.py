@@ -2,12 +2,12 @@
 import torch.optim as optim
 import torch.nn.functional as F
 import numpy as np
-from mot_model import *
 from torch.utils.data import DataLoader
 from dataset import DatasetFromFolder
 import time, random, os, shutil
 from munkres import Munkres
-from global_set import edge_initial, u_initial, app_fine_tune
+from global_set import edge_initial, u_initial
+from mot_model import *
 
 from tensorboardX import SummaryWriter
 
@@ -22,7 +22,7 @@ def deleteDir(del_dir):
 
 
 class GN():
-    def __init__(self, lr=1e-3, batchs=8, cuda=True):
+    def __init__(self, lr=5e-4, batchs=8, cuda=True):
         '''
         :param tt: train_test
         :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
@@ -45,8 +45,8 @@ class GN():
         self.resetU()
 
         self.Uphi = uphi().to(self.device)
-        self.Ephi = ephi().to(self.device)
         self.Vphi = vphi().to(self.device)
+        self.Ephi = ephi().to(self.device)
 
         self.criterion = nn.MSELoss() if criterion_s else nn.CrossEntropyLoss()
         self.criterion = self.criterion.to(self.device)
@@ -55,6 +55,7 @@ class GN():
 
         self.optimizer = optim.Adam([
             {'params': self.Uphi.parameters()},
+            {'params': self.Vphi.parameters()},
             {'params': self.Ephi.parameters()}],
             lr=lr)
 
@@ -70,7 +71,11 @@ class GN():
             self.seq_index = seq
             start = time.time()
             sequence_dir = '../MOT/MOT16/train/MOT16-%02d'%seq
+
             self.outName = t_dir+'result_%02d.txt'%seq
+            out = open(self.outName, 'w')
+            out.close()
+
             self.train_set = DatasetFromFolder(sequence_dir, self.outName)
 
             self.train_test = lengths[i]
@@ -109,7 +114,7 @@ class GN():
         self.writer.add_graph(self.Ephi, (E, V1, V2, u))
 
     def log(self, t_data):
-        out = open(self.outName, 'w')
+        out = open(self.outName, 'a')
         print >> out, self.criterion
         print >> out, 'lr:{}'.format(self.lr)
         print >> out, self.optimizer.state_dict()
@@ -135,7 +140,7 @@ class GN():
             self.train_set.loadNext()  # Get the next frame
             edge_counter += self.train_set.m * self.train_set.n
             show_name = 'LOSS_{}'.format(step)
-            # print '         Step -', step
+            print '         Step -', step
             data_loader = DataLoader(dataset=self.train_set, num_workers=self.numWorker, batch_size=self.batchsize, shuffle=True)
             for epoch in xrange(1, self.nEpochs):
                 num = 0
@@ -155,7 +160,17 @@ class GN():
                     u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
                     v1 = self.train_set.getApp(1, vs_index)
                     v2 = self.train_set.getApp(0, vr_index)
-                    v2_ = self.Vphi(e, v1, v2, u_)
+                    tmp_gt = torch.FloatTensor(gt.cpu().numpy()).to(self.device)
+                    v3 = self.Vphi(e, v1, v2, u_)
+                    v2_ = (1 - tmp_gt) * v2 + tmp_gt * v3
+                    # print gt
+                    # print tmp_gt
+                    # print v1
+                    # print v2
+                    # print v3
+                    # print v2_
+                    # print '*'*39
+                    # raw_input('Continue')
                     e_ = self.Ephi(e, v1, v2_, u_)
 
                     if self.show_process:
@@ -169,13 +184,13 @@ class GN():
                             print 'GT:', gt.cpu().data.numpy()[0]
 
                     # Penalize the u to let its value not too big
-                    arpha = torch.mean(torch.abs(u_))
-                    arpha_loss += arpha.item()
-                    arpha.backward(retain_graph=True)
+                    # arpha = torch.mean(torch.abs(u_))
+                    # arpha_loss += arpha.item()
+                    # arpha.backward(retain_graph=True)
 
-                    v_l = self.criterion_v(v2, torch.FloatTensor((1.0-gt).cpu().numpy()).to(self.device)*v2_)
-                    v_loss += v_l.item()
-                    v_l.backward(retain_graph=True)
+                    # v_l = self.criterion_v(v2, (1 - tmp_gt) * v2_)
+                    # v_loss += v_l.item()
+                    # v_l.backward(retain_graph=True)
 
                     #  The regular loss
                     # print e_.size(), e_
@@ -203,13 +218,13 @@ class GN():
                         self.step_input = 0
 
                 epoch_loss /= num
-                # print '         Loss of epoch {}: {}.'.format(epoch, epoch_loss)
+                print '         Loss of epoch {}: {}.'.format(epoch, epoch_loss)
                 self.writer.add_scalars(show_name, {'regular': epoch_loss, 'v': v_loss/num,
                                                     'u': arpha_loss/num}, epoch)
                 if epoch_loss < self.loss_threhold:
                     break
 
-            # print '         Time consuming:{}\n\n'.format(time.time()-start)
+            print '         Time consuming:{}\n\n'.format(time.time()-start)
             self.updateUVE()
             self.train_set.showE()
             self.showU()
@@ -243,7 +258,7 @@ class GN():
         nxt = self.train_set.nxt
         for edge in self.train_set:
             e, gt, vs_index, vr_index = edge
-            e = e.to(self.device).view(1,-1)
+            e = e.view(1,-1).to(self.device)
             v1 = self.train_set.getApp(1, vs_index)
             v2 = self.train_set.getApp(0, vr_index)
             v2_ = self.Vphi(e, v1, v2, u_)
@@ -293,7 +308,7 @@ class GN():
             nxt = self.train_set.nxt
             for edge in self.train_set.candidates:
                 e, gt, vs_index, vr_index = edge
-                e = e.to(self.device).view(1,-1)
+                e = e.view(1,-1)
                 v1 = self.train_set.getApp(1, vs_index)
                 v2 = self.train_set.getApp(0, vr_index)
                 v2_ = self.Vphi(e, v1, v2, u_)

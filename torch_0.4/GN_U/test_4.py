@@ -126,7 +126,7 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = 'all_4_2'
+        name = 'all_4'
         tail = 10
         self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%02d.pth'%(name, tail)).to(self.device)
         self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%02d.pth'%(name, tail)).to(self.device)
@@ -250,7 +250,6 @@ class GN():
                     v1 = self.train_set.getApp(1, vs_index)
                     v2 = self.train_set.getApp(0, vr_index)
                     v2_ = rho * v1 + (1 - rho) * v2
-                    self.train_set.detections[nxt][vr_index][0] = v2_.data
                     e_ = self.Ephi(e, v1, v2_, u_)
                     self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                     tmp = F.softmax(e_)
@@ -269,6 +268,12 @@ class GN():
                     # print (i,j)
                     if ret[i][j] >= tau_threshold:
                         continue
+
+                    v1 = self.train_set.getApp(1, i)
+                    v2 = self.train_set.getApp(0, j)
+                    v2_ = rho * v1 + (1 - rho) * v2
+                    self.train_set.detections[nxt][vr_index][0] = v2_.data
+
                     id = id_con[self.cur][i]
                     id_con[self.nxt][j] = id
                     attr1 = line_con[self.cur][i]

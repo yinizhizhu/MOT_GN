@@ -117,19 +117,11 @@ class ephi(nn.Module):
 class vphi(nn.Module):
     def __init__(self):
         super(vphi, self).__init__()
-        if criterion_s:
-            self.features = nn.Sequential(
-                nn.Linear(u_num+v_num*2+e_num, 256),
-                nn.LeakyReLU(inplace=True),
-                nn.Linear(256, v_num),
-                nn.Sigmoid(),
-            )
-        else:
-            self.features = nn.Sequential(
-                nn.Linear(u_num+v_num*2+e_num, 256),
-                nn.LeakyReLU(inplace=True),
-                nn.Linear(256, v_num),
-            )
+        self.features = nn.Sequential(
+            nn.Linear(u_num+v_num*2+e_num, 256),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(256, v_num),
+        )
 
     def forward(self, e, v1, v2, u):
         """

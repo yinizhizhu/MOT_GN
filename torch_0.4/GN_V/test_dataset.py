@@ -183,7 +183,7 @@ class DatasetFromFolder(data.Dataset):
                 GTframe = self.bbx[self.f_step][j]
                 p = self.IOU(Reframe, GTframe)
                 # 1 - match, 0 - mismatch
-                ans[i][j] = torch.FloatTensor([1 - p, p])
+                ans[i][j] = torch.FloatTensor([1 - p, p]).to(self.device)
         return ans
 
     def aggregate(self, set):

@@ -1,11 +1,11 @@
 # from __future__ import print_function
 import numpy as np
-from mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil
-from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering, app_fine_tune
+from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
 from test_dataset import DatasetFromFolder
+from mot_model import *
 
 torch.manual_seed(123)
 np.random.seed(123)
@@ -50,6 +50,7 @@ class GN():
         self.loadModel()
 
         self.out_dir = t_dir + 'motmetrics_%s/'%type
+
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
@@ -118,11 +119,17 @@ class GN():
 
     def loadModel(self):
         name = 'all_7'
+
+        if edge_initial == 1:
+            i_name = 'Random/'
+        elif edge_initial == 0:
+            i_name = 'IoU/'
+
         tail = 13
-        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%02d.pth'%(name, tail)).to(self.device)
-        self.Vphi = torch.load('Results/MOT16/IoU/%s/vphi_%02d.pth'%(name, tail)).to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%02d.pth'%(name, tail)).to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/%s/u_%02d.pth'%(name, tail))
+        self.Uphi = torch.load('Results/MOT16/%s/%s/uphi_%02d.pth'%(i_name, name, tail)).to(self.device)
+        self.Vphi = torch.load('Results/MOT16/%s/%s/vphi_%02d.pth'%(i_name, name, tail)).to(self.device)
+        self.Ephi = torch.load('Results/MOT16/%s/%s/ephi_%02d.pth'%(i_name, name, tail)).to(self.device)
+        self.u = torch.load('Results/MOT16/%s/%s/u_%02d.pth'%(i_name, name, tail))
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -229,7 +236,6 @@ class GN():
 
             # update the edges
             # print 'T',
-            nxt = self.train_set.nxt
             ret = self.train_set.getRet()
             for edge in self.train_set.candidates:
                 e, vs_index, vr_index = edge
@@ -239,9 +245,7 @@ class GN():
                 v1 = self.train_set.getApp(1, vs_index)
                 v2 = self.train_set.getApp(0, vr_index)
                 v2_ = self.Vphi(e, v1, v2, u_)
-                self.train_set.detections[nxt][vr_index][0] = v2_.data
                 e_ = self.Ephi(e, v1, v2_, u_)
-                self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
                 tmp = tmp.cpu().data.numpy()[0]
                 ret[vs_index][vr_index] = float(tmp[0])
@@ -253,10 +257,19 @@ class GN():
             results = self.hungarian.compute(ret)
 
             out = open(outFile, 'a')
+            nxt = self.train_set.nxt
             for (i, j) in results:
                 # print (i,j)
                 if ret[i][j] >= tau_threshold:
                     continue
+                e = self.train_set.edges[i][j].view(1, -1)
+                v1 = self.train_set.getApp(1, i)
+                v2 = self.train_set.getApp(0, j)
+                v2_ = self.Vphi(e, v1, v2, u_)
+                self.train_set.detections[nxt][j][0] = v2_.data
+                e_ = self.Ephi(e, v1, v2_, u_)
+                self.train_set.edges[i][j] = e_.data.view(-1)
+
                 id = id_con[self.cur][i]
                 id_con[self.nxt][j] = id
                 attr1 = line_con[self.cur][i]

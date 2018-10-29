@@ -1,11 +1,11 @@
 # from __future__ import print_function
 import numpy as np
-from mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil
-from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering, app_fine_tune
+from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
 from test_dataset import DatasetFromFolder
+from mot_model import *
 
 torch.manual_seed(123)
 np.random.seed(123)
@@ -55,6 +55,7 @@ class GN():
         self.loadModel()
 
         self.out_dir = t_dir + 'motmetrics_%s_4/'%type
+
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
@@ -126,11 +127,17 @@ class GN():
 
     def loadModel(self):
         name = 'all_4'
+
+        if edge_initial == 1:
+            i_name = 'Random/'
+        elif edge_initial == 0:
+            i_name = 'IoU/'
+
         tail = 10
-        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%02d.pth'%(name, tail)).to(self.device)
-        self.Vphi = torch.load('Results/MOT16/IoU/%s/vphi_%02d.pth'%(name, tail)).to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%02d.pth'%(name, tail)).to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/%s/u_%02d.pth'%(name, tail))
+        self.Uphi = torch.load('Results/MOT16/%s/%s/uphi_%02d.pth'%(i_name, name, tail)).to(self.device)
+        self.Vphi = torch.load('Results/MOT16/%s/%s/vphi_%02d.pth'%(i_name, name, tail)).to(self.device)
+        self.Ephi = torch.load('Results/MOT16/%s/%s/ephi_%02d.pth'%(i_name, name, tail)).to(self.device)
+        self.u = torch.load('Results/MOT16/%s/%s/u_%02d.pth'%(i_name, name, tail))
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -183,34 +190,120 @@ class GN():
         :param outFile: the name of output file
         :return: None
         '''
-        gtIn = open(gtFile, 'r')
-        self.cur, self.nxt = 0, 1
-        line_con = [[], []]
-        id_con = [[], []]
-        id_step = 1
+        with torch.no_grad():
+            gtIn = open(gtFile, 'r')
+            self.cur, self.nxt = 0, 1
+            line_con = [[], []]
+            id_con = [[], []]
+            id_step = 1
 
-        step = head + self.train_set.setBuffer(head)
-        while step < tail:
-            t_gap = self.train_set.loadNext()
-            step += t_gap
-            # print head+step, 'F',
+            step = head + self.train_set.setBuffer(head)
+            while step < tail:
+                # print '     ', step
+                t_gap = self.train_set.loadNext()
+                step += t_gap
+                # print 'F', 't_gap=%d'%t_gap,
 
-            u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
+                u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
 
-            # print 'Fo'
-            m = self.train_set.m
-            n = self.train_set.n
-            if n==0:
-                print 'There is no detection in the rest of sequence!'
-                break
+                # print 'Fo',
+                m = self.train_set.m
+                n = self.train_set.n
+                # print m, n,
+                if n==0:
+                    print 'There is no detection in the rest of sequence!'
+                    break
 
-            if id_step == 1:
-                out = open(outFile, 'a')
+                if id_step == 1:
+                    out = open(outFile, 'a')
+                    i = 0
+                    while i < m:
+                        attrs = gtIn.readline().strip().split(',')
+                        if float(attrs[6]) >= tau_conf_score:
+                            attrs.append(1)
+                            attrs[1] = str(id_step)
+                            line = ''
+                            for attr in attrs[:-1]:
+                                line += attr + ','
+                            if show_recovering:
+                                line += '0'
+                            else:
+                                line = line[:-1]
+                            print >> out, line
+                            line_con[self.cur].append(attrs)
+                            id_con[self.cur].append(id_step)
+                            id_step += 1
+                            i += 1
+                    out.close()
+                # print '0.0',
                 i = 0
-                while i < m:
+                while i < n:
                     attrs = gtIn.readline().strip().split(',')
                     if float(attrs[6]) >= tau_conf_score:
                         attrs.append(1)
+                        line_con[self.nxt].append(attrs)
+                        id_con[self.nxt].append(-1)
+                        i += 1
+
+                # update the edges
+                # print 'T',
+                ret = self.train_set.getRet()
+                for edge in self.train_set.candidates:
+                    e, vs_index, vr_index = edge
+                    if ret[vs_index][vr_index] == 1.0:
+                        continue
+                    e = e.to(self.device).view(1,-1)
+                    v1 = self.train_set.getApp(1, vs_index)
+                    v2 = self.train_set.getApp(0, vr_index)
+                    v2_ = self.Vphi(e, v1, v2, u_)
+                    e_ = self.Ephi(e, v1, v2_, u_)
+                    tmp = F.softmax(e_)
+                    tmp = tmp.cpu().data.numpy()[0]
+                    ret[vs_index][vr_index] = float(tmp[0])
+
+                # self.train_set.showE(outFile)
+
+                # for j in ret:
+                #     print j
+                # print ret
+                results = self.hungarian.compute(ret)
+
+                out = open(outFile, 'a')
+                nxt = self.train_set.nxt
+                for (i, j) in results:
+                    # print (i,j)
+                    if ret[i][j] >= tau_threshold:
+                        continue
+                    e = self.train_set.edges[i][j].view(1, -1)
+                    v1 = self.train_set.getApp(1, i)
+                    v2 = self.train_set.getApp(0, j)
+                    v2_ = self.Vphi(e, v1, v2, u_)
+                    self.train_set.detections[nxt][j][0] = v2_.data
+                    e_ = self.Ephi(e, v1, v2_, u_)
+                    self.train_set.edges[i][j] = e_.data.view(-1)
+
+                    id = id_con[self.cur][i]
+                    id_con[self.nxt][j] = id
+                    attr1 = line_con[self.cur][i]
+                    attr2 = line_con[self.nxt][j]
+                    # print attrs
+                    attr2[1] = str(id)
+                    if attr1[-1] > 1:
+                        # for the missing detections
+                        self.linearModel(out, attr1, attr2)
+                    line = ''
+                    for attr in attr2[:-1]:
+                        line += attr + ','
+                    if show_recovering:
+                        line += '0'
+                    else:
+                        line = line[:-1]
+                    print >> out, line
+
+                for i in xrange(n):
+                    if id_con[self.nxt][i] == -1:
+                        id_con[self.nxt][i] = id_step
+                        attrs = line_con[self.nxt][i]
                         attrs[1] = str(id_step)
                         line = ''
                         for attr in attrs[:-1]:
@@ -220,88 +313,22 @@ class GN():
                         else:
                             line = line[:-1]
                         print >> out, line
-                        line_con[self.cur].append(attrs)
-                        id_con[self.cur].append(id_step)
                         id_step += 1
-                        i += 1
                 out.close()
 
-            i = 0
-            while i < n:
-                attrs = gtIn.readline().strip().split(',')
-                if float(attrs[6]) >= tau_conf_score:
-                    attrs.append(1)
-                    line_con[self.nxt].append(attrs)
-                    id_con[self.nxt].append(-1)
-                    i += 1
-
-            # update the edges
-            # print 'T',
-            nxt = self.train_set.nxt
-            ret = self.train_set.getRet()
-            for edge in self.train_set.candidates:
-                e, vs_index, vr_index = edge
-                if ret[vs_index][vr_index] == 1.0:
-                    continue
-                e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getApp(1, vs_index)
-                v2 = self.train_set.getApp(0, vr_index)
-                v2_ = self.Vphi(e, v1, v2, u_)
-                self.train_set.detections[nxt][vr_index][0] = v2_.data
-                e_ = self.Ephi(e, v1, v2_, u_)
-                self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
-                tmp = F.softmax(e_)
-                tmp = tmp.cpu().data.numpy()[0]
-                ret[vs_index][vr_index] = float(tmp[0])
-
-            # self.train_set.showE(outFile)
-
-            # for j in ret:
-            #     print j
-            results = self.hungarian.compute(ret)
-
-            out = open(outFile, 'a')
-            for (i, j) in results:
-                # print (i,j)
-                if ret[i][j] >= tau_threshold:
-                    continue
-                id = id_con[self.cur][i]
-                id_con[self.nxt][j] = id
-                attr1 = line_con[self.cur][i]
-                attr2 = line_con[self.nxt][j]
-                # print attrs
-                attr2[1] = str(id)
-                if attr1[-1] > 1:
-                    # for the missing detections
-                    self.linearModel(out, attr1, attr2)
-                line = ''
-                for attr in attr2[:-1]:
-                    line += attr + ','
-                if show_recovering:
-                    line += '0'
-                else:
-                    line = line[:-1]
-                print >> out, line
-
-            for i in xrange(n):
-                if id_con[self.nxt][i] == -1:
-                    id_con[self.nxt][i] = id_step
-                    attrs = line_con[self.nxt][i]
-                    attrs[1] = str(id_step)
-                    line = ''
-                    for attr in attrs[:-1]:
-                        line += attr + ','
-                    if show_recovering:
-                        line += '0'
-                    else:
-                        line = line[:-1]
-                    print >> out, line
-                    id_step += 1
-            out.close()
-
-            index = 0
-            for (i, j) in results:
-                while i != index:
+                index = 0
+                for (i, j) in results:
+                    while i != index:
+                        attrs = line_con[self.cur][index]
+                        # print '*', attrs, '*'
+                        if attrs[-1] + t_gap <= gap:
+                            attrs[-1] += t_gap
+                            line_con[self.nxt].append(attrs)
+                            id_con[self.nxt].append(id_con[self.cur][index])
+                            self.train_set.moveApp(index)
+                        index += 1
+                    index += 1
+                while index < m:
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
                     if attrs[-1] + t_gap <= gap:
@@ -310,28 +337,19 @@ class GN():
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.train_set.moveApp(index)
                     index += 1
-                index += 1
-            while index < m:
-                attrs = line_con[self.cur][index]
-                # print '*', attrs, '*'
-                if attrs[-1] + t_gap <= gap:
-                    attrs[-1] += t_gap
-                    line_con[self.nxt].append(attrs)
-                    id_con[self.nxt].append(id_con[self.cur][index])
-                    self.train_set.moveApp(index)
-                index += 1
 
-            line_con[self.cur] = []
-            id_con[self.cur] = []
-            # print head+step, results
-            self.train_set.swapFC()
-            self.swapFC()
-        gtIn.close()
+                line_con[self.cur] = []
+                id_con[self.cur] = []
+                # print 'Results',
+                self.train_set.swapFC()
+                self.swapFC()
+                # print '^.^|', step, tail
+            gtIn.close()
 
-        # tra_tst = 'training sets' if head == 1 else 'validation sets'
-        # out = open(outFile, 'a')
-        # print >> out, tra_tst
-        # out.close()
+            # tra_tst = 'training sets' if head == 1 else 'validation sets'
+            # out = open(outFile, 'a')
+            # print >> out, tra_tst
+            # out.close()
 
 if __name__ == '__main__':
     try:

@@ -22,7 +22,7 @@ def deleteDir(del_dir):
 
 
 class GN():
-    def __init__(self, lr=5e-4, batchs=8, cuda=True):
+    def __init__(self, lr=1e-3, batchs=8, cuda=True):
         '''
         :param tt: train_test
         :param tag: 1 - evaluation on testing data, 0 - without evaluation on testing data
@@ -158,7 +158,8 @@ class GN():
                     u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
                     v1 = self.train_set.getApp(1, vs_index)
                     v2 = self.train_set.getApp(0, vr_index)
-                    v2_ = rho * v1 + (1 - rho) * v2
+                    tmp_gt = torch.FloatTensor(gt.cpu().numpy()).to(self.device) * rho
+                    v2_ = tmp_gt * v1 + (1 - tmp_gt) * v2
                     e_ = self.Ephi(e, v1, v2_, u_)
 
                     if self.show_process:
@@ -172,9 +173,9 @@ class GN():
                             print 'GT:', gt.cpu().data.numpy()[0]
 
                     # Penalize the u to let its value not too big
-                    arpha = torch.mean(torch.abs(u_))
-                    arpha_loss += arpha.item()
-                    arpha.backward(retain_graph=True)
+                    # arpha = torch.mean(torch.abs(u_))
+                    # arpha_loss += arpha.item()
+                    # arpha.backward(retain_graph=True)
 
                     #  The regular loss
                     # print e_.size(), e_
@@ -366,5 +367,6 @@ if __name__ == '__main__':
         print ''
         print '-'*90
         print 'Existing from training early.'
+
 # ImportError:/libgomp.so.1: version 'GOMP_4.0' not found (required by torch/lib/libcaffe2.so)
 #/usr/lib/x86_64-linux-gnu/libgomp.so.1
