@@ -164,55 +164,22 @@ class GN():
                     u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
                     v1 = self.train_set.getApp(1, vs_index)
                     v2 = self.train_set.getApp(0, vr_index)
+                    e_ = self.Ephi(e, v1, v2, u_)
+                    v2_ = self.Vphi(e_, v1, v2, u_)
 
-                    v2_ = self.Vphi(e, v1, v2, u_)
+                    arpha = torch.mean(torch.abs(u_))
+                    arpha_loss += arpha.item()
+                    arpha.backward(retain_graph=True)
+
+                    loss = self.criterion(e_, gt.squeeze(1))
+                    epoch_loss += loss.item()
+                    loss.backward(retain_graph=True)
 
                     tmp_gt = 1 - torch.FloatTensor(gt.cpu().numpy()).to(self.device)
-                    # v3 = self.Vphi(e, v1, v2, u_)
-                    # v2_ = (1 - tmp_gt) * v2 + tmp_gt * v3
-                    # print gt
-                    # print tmp_gt
-                    # print v1
-                    # print v2
-                    # print v3
-                    # print v2_
-                    # print '*'*39
-                    # raw_input('Continue')
-                    e_ = self.Ephi(e, v1, v2_, u_)
-
-                    if self.show_process:
-                        print '-'*66
-                        print vs_index, vr_index
-                        print 'e:', e.cpu().data.numpy()[0][0],
-                        print 'e_:', e_.cpu().data.numpy()[0][0],
-                        if criterion_s:
-                            print 'GT:', gt.cpu().data.numpy()[0][0]
-                        else:
-                            print 'GT:', gt.cpu().data.numpy()[0]
-
-                    # Penalize the u to let its value not too big
-                    # arpha = torch.mean(torch.abs(u_))
-                    # arpha_loss += arpha.item()
-                    # arpha.backward(retain_graph=True)
-
                     v_l = self.criterion_v(tmp_gt * v2, tmp_gt * v2_)
                     v_loss += v_l.item()
-                    v_l.backward(retain_graph=True)
+                    v_l.backward()
 
-                    # Penalize the e_ to let its value not too big
-                    # beta = torch.mean(torch.abs(e_))
-                    # beta_loss += beta.item()
-                    # beta.backward(retain_graph=True)
-
-                    #  The regular loss
-                    # print e_.size(), e_
-                    # print gt.size(), gt
-                    loss = self.criterion(e_, gt.squeeze(1))
-                    # print loss
-                    epoch_loss += loss.item()
-                    loss.backward()
-
-                    # update the network: Uphi and Ephi
                     self.optimizer.step()
 
                     #  Show the parameters of the Uphi and Ephi to check the process of optimiser
@@ -273,10 +240,10 @@ class GN():
             e = e.view(1,-1).to(self.device)
             v1 = self.train_set.getApp(1, vs_index)
             v2 = self.train_set.getApp(0, vr_index)
-            v2_ = self.Vphi(e, v1, v2, u_)
+            e_ = self.Ephi(e, v1, v2, u_)
+            v2_ = self.Vphi(e_, v1, v2, u_)
             if gt.item():
                 self.train_set.detections[nxt][vr_index][0] = v2_.data
-            e_ = self.Ephi(e, v1, v2_, u_)
             self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
 
     def update(self):
@@ -323,10 +290,10 @@ class GN():
                 e = e.view(1,-1)
                 v1 = self.train_set.getApp(1, vs_index)
                 v2 = self.train_set.getApp(0, vr_index)
-                v2_ = self.Vphi(e, v1, v2, u_)
+                e_ = self.Ephi(e, v1, v2, u_)
+                v2_ = self.Vphi(e_, v1, v2, u_)
                 if gt.item():
                     self.train_set.detections[nxt][vr_index][0] = v2_.data
-                e_ = self.Ephi(e, v1, v2_, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
                 tmp = tmp.cpu().data.numpy()[0]
