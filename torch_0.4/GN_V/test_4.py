@@ -54,7 +54,7 @@ class GN():
         print '     Loading the model...'
         self.loadModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_4/'%type
+        self.out_dir = t_dir + 'motmetrics_%s_4_v2/'%type
 
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
@@ -126,7 +126,7 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = 'all_4'
+        name = 'all_4_v2'
 
         if edge_initial == 1:
             i_name = 'Random/'
@@ -327,6 +327,15 @@ class GN():
                             id_con[self.nxt].append(id_con[self.cur][index])
                             self.train_set.moveApp(index)
                         index += 1
+
+                    if ret[i][j] >= tau_threshold:
+                        attrs = line_con[self.cur][index]
+                        # print '*', attrs, '*'
+                        if attrs[-1] + t_gap <= gap:
+                            attrs[-1] += t_gap
+                            line_con[self.nxt].append(attrs)
+                            id_con[self.nxt].append(id_con[self.cur][index])
+                            self.train_set.moveApp(index)
                     index += 1
                 while index < m:
                     attrs = line_con[self.cur][index]

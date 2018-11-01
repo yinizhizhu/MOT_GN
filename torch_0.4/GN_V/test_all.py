@@ -315,6 +315,15 @@ class GN():
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.train_set.moveApp(index)
                     index += 1
+
+                if ret[i][j] >= tau_threshold:
+                    attrs = line_con[self.cur][index]
+                    # print '*', attrs, '*'
+                    if attrs[-1] + t_gap <= gap:
+                        attrs[-1] += t_gap
+                        line_con[self.nxt].append(attrs)
+                        id_con[self.nxt].append(id_con[self.cur][index])
+                        self.train_set.moveApp(index)
                 index += 1
             while index < m:
                 attrs = line_con[self.cur][index]

@@ -2,10 +2,11 @@
 import numpy as np
 from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil, gc
-from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
-from m_test_dataset import DatasetFromFolder
-from m_mot_model import *
+import time, os, shutil, torch
+from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
+from mot_model import appearance
+from test_dataset import ADatasetFromFolder
+from m_test_dataset import MDatasetFromFolder
 
 torch.manual_seed(123)
 np.random.seed(123)
@@ -34,9 +35,10 @@ test_lengths = [525, 900, 750]
 
 tt_tag = 0  # 1 - test, 0 - train
 
+ALPHA_TAG = None  # 1 - a*A+(1-a)*M, 2 - a*A+M, 3 - A+a*M
 
 class GN():
-    def __init__(self, seq_index, tt, cuda=True):
+    def __init__(self, seq_index, tt, a, cuda=True):
         '''
         Evaluating with the MotMetrics
         :param seq_index: the number of the sequence
@@ -49,14 +51,16 @@ class GN():
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tt = tt
+        self.alpha = a
         self.missingCounter = 0
         self.sideConnection = 0
 
         print '     Loading the model...'
-        self.loadModel()
+        self.loadAModel()
+        self.loadMModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_v2_4/'%type
-
+        self.out_dir = t_dir + 'motmetrics_%s_show/'%(type)
+        print '		', self.out_dir
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
@@ -66,7 +70,8 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.train_set = DatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
+        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
+        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
 
         gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
         self.copyLines(self.seq_index, 1, gt_training, self.tt)
@@ -126,14 +131,37 @@ class GN():
         f = open(out_file, 'w')
         f.close()
 
-    def loadModel(self):
-        name = 'all_v2_4'
-
+    def loadAModel(self):
+        from mot_model import uphi, ephi
+        if edge_initial == 0:
+            model_dir = 'MOT'
+            name = 'all_det_ft'
+            i_name = 'IoU'
+        elif edge_initial == 1:
+            model_dir = 'Appearance'
+            name = 'all_4_CE'
+            i_name = 'Random'
         tail = 10
-        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%d.pth'%(name, tail)).to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%d.pth'%(name, tail)).to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/%s/u_%d.pth'%(name, tail))
-        self.u = self.u.to(self.device)
+        self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%02d.pth'%(model_dir, i_name, name, tail)).to(self.device)
+        self.AEphi = torch.load('../%s/Results/MOT16/%s/%s/ephi_%02d.pth'%(model_dir,i_name, name, tail)).to(self.device)
+        self.Au = torch.load('../%s/Results/MOT16/%s/%s/u_%02d.pth'%(model_dir,i_name, name, tail))
+        self.Au = self.Au.to(self.device)
+
+    def loadMModel(self):
+        from m_mot_model import uphi, ephi
+        if edge_initial == 0:
+            model_dir = 'MOT_Motion'
+            name = 'all_v2_4'
+            i_name = 'IoU'
+        elif edge_initial == 1:
+            model_dir = 'Motion'
+            name = 'all_4'
+            i_name = 'Random'
+        tail = 10
+        self.MUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
+        self.MEphi = torch.load('../%s/Results/MOT16/%s/%s/ephi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
+        self.Mu = torch.load('../%s/Results/MOT16/%s/%s/u_%d.pth'%(model_dir,i_name, name, tail))
+        self.Mu = self.Mu.to(self.device)
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
@@ -192,27 +220,47 @@ class GN():
         id_con = [[], []]
         id_step = 1
 
-        step = head + self.train_set.setBuffer(head)
-        while step < tail:
+        a_step = head + self.a_train_set.setBuffer(head)
+        m_step = head + self.m_train_set.setBuffer(head)
+        if a_step != m_step:
+            print 'Something is wrong!'
+            print 'a_step =', a_step, ', m_step =', m_step
+            raw_input('Continue?')
+
+        while a_step < tail:
             # print '*********************************'
-            t_gap = self.train_set.loadNext()
-            step += t_gap
+            a_t_gap = self.a_train_set.loadNext()
+            m_t_gap = self.m_train_set.loadNext()
+            if a_t_gap != m_t_gap:
+                print 'Something is wrong!'
+                print 'a_t_gap =', a_t_gap, ', m_t_gap =', m_t_gap
+                raw_input('Continue?')
+            a_step += a_t_gap
+            m_step += m_step
             # print head+step, 'F',
 
-            u_ = self.Uphi(self.train_set.E, self.train_set.V, self.u)
+            a_u_ = self.AUphi(self.a_train_set.E, self.a_train_set.V, self.Au)
+            m_u_ = self.MUphi(self.m_train_set.E, self.m_train_set.V, self.Mu)
 
             # print 'Fo'
-            m = self.train_set.m
-            n = self.train_set.n
+            a_m = self.a_train_set.m
+            a_n = self.a_train_set.n
+            m_m = self.m_train_set.m
+            m_n = self.m_train_set.n
+
+            if a_m != m_m or a_n != m_n:
+                print 'Something is wrong!'
+                print 'a_m = %d, m_m = %d'%(a_m, m_m), ', a_n = %d, m_n = %d'%(a_n, m_n)
+                raw_input('Continue?')
             # print 'm = %d, n = %d'%(m, n)
-            if n==0:
+            if a_n==0:
                 print 'There is no detection in the rest of sequence!'
                 break
 
             if id_step == 1:
                 out = open(outFile, 'a')
                 i = 0
-                while i < m:
+                while i < a_m:
                     attrs = gtIn.readline().strip().split(',')
                     if float(attrs[6]) >= tau_conf_score:
                         attrs.append(1)
@@ -233,7 +281,7 @@ class GN():
                 out.close()
 
             i = 0
-            while i < n:
+            while i < a_n:
                 attrs = gtIn.readline().strip().split(',')
                 if float(attrs[6]) >= tau_conf_score:
                     attrs.append(1)
@@ -243,34 +291,50 @@ class GN():
 
             # update the edges
             # print 'T',
-            ret = self.train_set.getRet()
-            for edge in self.train_set.candidates:
-                e, vs_index, vr_index = edge
-                if ret[vs_index][vr_index] == 1.0:
+            ret = self.a_train_set.getRet()
+            for i in xrange(len(self.a_train_set.candidates)):
+                a_e, a_vs_index, a_vr_index = self.a_train_set.candidates[i]
+                m_e, m_vs_index, m_vr_index = self.m_train_set.candidates[i]
+                if a_vs_index != m_vs_index or a_vr_index != m_vr_index:
+                    print 'Something is wrong!'
+                    print 'a_vs_index = %d, m_vs_index = %d'%(a_vs_index, m_vs_index)
+                    print 'a_vr_index = %d, m_vr_index = %d'%(a_vr_index, m_vr_index)
+                    raw_input('Continue?')
+                if ret[a_vs_index][a_vr_index] == 1.0:
                     continue
-                e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getMotion(1, vs_index)
-                v2 = self.train_set.getMotion(0, vr_index, vs_index, line_con[self.cur][vs_index][-1])
-                e_ = self.Ephi(e, v1, v2, u_)
-                self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
-                tmp = F.softmax(e_)
-                tmp = tmp.cpu().data.numpy()[0]
-                ret[vs_index][vr_index] = float(tmp[0])
+                a_e = a_e.to(self.device).view(1,-1)
+                a_v1 = self.a_train_set.getApp(1, a_vs_index)
+                a_v2 = self.a_train_set.getApp(0, a_vr_index)
+                a_e_ = self.AEphi(a_e, a_v1, a_v2, a_u_)
+                self.a_train_set.edges[a_vs_index][a_vr_index] = a_e_.data.view(-1)
+                a_tmp = F.softmax(a_e_)
+                a_tmp = a_tmp.cpu().data.numpy()[0]
 
-            # self.train_set.showE(outFile)
+                m_e = m_e.to(self.device).view(1,-1)
+                m_v1 = self.m_train_set.getMotion(1, m_vs_index)
+                m_v2 = self.m_train_set.getMotion(0, m_vr_index, m_vs_index, line_con[self.cur][m_vs_index][-1])
+                m_e_ = self.MEphi(m_e, m_v1, m_v2, m_u_)
+                self.m_train_set.edges[m_vs_index][m_vr_index] = m_e_.data.view(-1)
+                m_tmp = F.softmax(m_e_)
+                m_tmp = m_tmp.cpu().data.numpy()[0]
+
+                ret[a_vs_index][a_vr_index] = float(a_tmp[0])*self.alpha + float(m_tmp[0])*(1-self.alpha)
+
+            # self.a_train_set.showE(outFile)
+            # self.m_train_set.showE(outFile)
 
             # for j in ret:
             #     print j
             results = self.hungarian.compute(ret)
 
             out = open(outFile, 'a')
-            look_up = set(j for j in xrange(n))
+            look_up = set(j for j in xrange(a_n))
             for (i, j) in results:
                 # print (i,j)
                 if ret[i][j] >= tau_threshold:
                     continue
                 look_up.remove(j)
-                self.train_set.updateVelocity(i, j, line_con[self.cur][i][-1], False)
+                self.m_train_set.updateVelocity(i, j, line_con[self.cur][i][-1], False)
 
                 id = id_con[self.cur][i]
                 id_con[self.nxt][j] = id
@@ -292,9 +356,9 @@ class GN():
                 self.bbx_counter += 1
 
             for j in look_up:
-                self.train_set.updateVelocity(-1, j, tag=False)
+                self.m_train_set.updateVelocity(-1, j, tag=False)
 
-            for i in xrange(n):
+            for i in xrange(a_n):
                 if id_con[self.nxt][i] == -1:
                     id_con[self.nxt][i] = id_step
                     attrs = line_con[self.nxt][i]
@@ -317,33 +381,26 @@ class GN():
                 while i != index:
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
-                    if attrs[-1] + t_gap <= gap:
-                        attrs[-1] += t_gap
+                    if attrs[-1] + a_t_gap <= gap:
+                        attrs[-1] += a_t_gap
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
-                        self.train_set.moveMotion(index)
+                        self.a_train_set.moveApp(index)
+                        self.m_train_set.moveMotion(index)
                     index += 1
-
-                if ret[i][j] >= tau_threshold:
-                    attrs = line_con[self.cur][index]
-                    # print '*', attrs, '*'
-                    if attrs[-1] + t_gap <= gap:
-                        attrs[-1] += t_gap
-                        line_con[self.nxt].append(attrs)
-                        id_con[self.nxt].append(id_con[self.cur][index])
-                        self.train_set.moveMotion(index)
                 index += 1
-            while index < m:
+            while index < a_m:
                 attrs = line_con[self.cur][index]
                 # print '*', attrs, '*'
-                if attrs[-1] + t_gap <= gap:
-                    attrs[-1] += t_gap
+                if attrs[-1] + a_t_gap <= gap:
+                    attrs[-1] += a_t_gap
                     line_con[self.nxt].append(attrs)
                     id_con[self.nxt].append(id_con[self.cur][index])
-                    self.train_set.moveMotion(index)
+                    self.a_train_set.moveApp(index)
+                    self.m_train_set.moveMotion(index)
                 index += 1
 
-            # con = self.train_set.cleanEdge()
+            # con = self.m_train_set.cleanEdge()
             # for i in xrange(len(con)-1, -1, -1):
             #     index = con[i]
             #     del line_con[self.nxt][index]
@@ -352,7 +409,8 @@ class GN():
             line_con[self.cur] = []
             id_con[self.cur] = []
             # print head+step, results
-            self.train_set.swapFC()
+            self.a_train_set.swapFC()
+            self.m_train_set.swapFC()
             self.swapFC()
         gtIn.close()
         print '     The results:', id_step, self.bbx_counter
@@ -364,61 +422,68 @@ class GN():
 
 if __name__ == '__main__':
     try:
-        if not os.path.exists('Results/'):
-            os.mkdir('Results/')
+        start_x = time.time()
+        for x in xrange(1, 2):
+            ALPHA_TAG = x
+            start_a = time.time()
+            for a in xrange(7, 8):
+                if not os.path.exists('Results/'):
+                    os.mkdir('Results/')
 
-        types = ['DPM', 'SDP', 'FRCNN']
-        for t in types:
-            type = t
-            head = time.time()
-            f_dir = 'Results/MOT%s/' % year
-            if not os.path.exists(f_dir):
-                os.mkdir(f_dir)
+                types = ['DPM', 'SDP', 'FRCNN']
+                for t in types:
+                    type = t
+                    head = time.time()
+                    f_dir = 'Results/MOT%s/' % year
+                    if not os.path.exists(f_dir):
+                        os.mkdir(f_dir)
 
-            if edge_initial == 1:
-                f_dir += 'Random/'
-            elif edge_initial == 0:
-                f_dir += 'IoU/'
+                    if edge_initial == 1:
+                        f_dir += 'Random/'
+                    elif edge_initial == 0:
+                        f_dir += 'IoU/'
 
-            if not os.path.exists(f_dir):
-                os.mkdir(f_dir)
-                print f_dir, 'does not exist!'
+                    if not os.path.exists(f_dir):
+                        os.mkdir(f_dir)
+                        print f_dir, 'does not exist!'
 
-            for i in xrange(len(seqs)):
-                seq_index = seqs[i]
-                tt = lengths[i]
-                print 'The sequence:', seq_index, '- The length of the training data:', tt
+                    for i in xrange(len(seqs)):
+                        seq_index = seqs[i]
+                        tt = lengths[i]
+                        print 'The sequence:', seq_index, '- The length of the training data:', tt
 
-                s_dir = f_dir + '%02d/' % seq_index
-                if not os.path.exists(s_dir):
-                    os.mkdir(s_dir)
-                    print s_dir, 'does not exist!'
+                        s_dir = f_dir + '%02d/' % seq_index
+                        if not os.path.exists(s_dir):
+                            os.mkdir(s_dir)
+                            print s_dir, 'does not exist!'
 
-                t_dir = s_dir + '%d/' % tt
-                if not os.path.exists(t_dir):
-                    os.mkdir(t_dir)
-                    print t_dir, 'does not exist!'
+                        t_dir = s_dir + '%d/' % tt
+                        if not os.path.exists(t_dir):
+                            os.mkdir(t_dir)
+                            print t_dir, 'does not exist!'
 
-                if tt_tag:
-                    seq_dir = 'MOT%d-%02d-%s' % (year, test_seqs[i], type)
-                    sequence_dir = '../MOT/MOT%d/test/'%year + seq_dir
-                    print ' ', sequence_dir
+                        if tt_tag:
+                            seq_dir = 'MOT%d-%02d-%s' % (year, test_seqs[i], type)
+                            sequence_dir = '../MOT/MOT%d/test/'%year + seq_dir
+                            print ' ', sequence_dir
 
-                    start = time.time()
-                    print '     Evaluating Graph Network...'
-                    gn = GN(test_seqs[i], test_lengths[i])
-                else:
-                    seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
-                    sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
-                    print ' ', sequence_dir
+                            start = time.time()
+                            print '     Evaluating Graph Network...'
+                            gn = GN(test_seqs[i], test_lengths[i], a/10.0)
+                        else:
+                            seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
+                            sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
+                            print ' ', sequence_dir
 
-                    start = time.time()
-                    print '     Evaluating Graph Network...'
-                    gn = GN(seqs[i], lengths[i])
-                print '     Recover the number missing detections:', gn.missingCounter
-                print '     The number of sideConnections:', gn.sideConnection
-                print 'Time consuming:', (time.time()-start)/60.0
-            print 'Time consuming:', (time.time()-head)/60.0
+                            start = time.time()
+                            print '     Evaluating Graph Network...'
+                            gn = GN(seqs[i], lengths[i], a/10.0)
+                            print '     Recover the number missing detections:', gn.missingCounter
+                            print '     The number of sideConnections:', gn.sideConnection
+                        print 'Time consuming:', (time.time()-start)/60.0
+                    print 'Time consuming:', (time.time()-head)/60.0
+                print 'Total time consuming:', (time.time()-start_a)/60.0
+            print 'Final time consuming:', (time.time()-start_x)/60.0
     except KeyboardInterrupt:
         print 'Time consuming:', (time.time()-start)/60.0
         print ''

@@ -49,7 +49,7 @@ class GN():
         print '     Loading the model...'
         self.loadModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s/'%type
+        self.out_dir = t_dir + 'motmetrics_%s_7/'%type
 
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
@@ -60,7 +60,7 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.train_set = DatasetFromFolder(sequence_dir, '..MOT/MOT16/test/MOT16-%02d'%self.seq_index)
+        self.train_set = DatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -91,9 +91,9 @@ class GN():
         :return: None
         '''
         if tt_tag:
-            basic_dir = '..MOT/MOT%d/test/MOT%d-%02d-%s/' % (year, year, seq, type)
+            basic_dir = '../MOT/MOT%d/test/MOT%d-%02d-%s/' % (year, year, seq, type)
         else:
-            basic_dir = '..MOT/MOT%d/train/MOT%d-%02d-%s/' % (year, year, seq, type)
+            basic_dir = '../MOT/MOT%d/train/MOT%d-%02d-%s/' % (year, year, seq, type)
         print '     Testing on', basic_dir, 'Length:', self.tt
         seqL = tail if tail != -1 else self.getSeqL(basic_dir + 'seqinfo.ini')
 
@@ -119,10 +119,17 @@ class GN():
 
     def loadModel(self):
         name = 'all_7'
+
         tail = 13
-        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%02d.pth'%(name, tail)).to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%02d.pth'%(name, tail)).to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/%s/u_%02d.pth'%(name, tail))
+        if edge_initial == 1:
+            i_name = 'Random'
+        elif edge_initial == 0:
+            i_name = 'IoU'
+        elif edge_initial == 3:
+            i_name = 'Equal'
+        self.Uphi = torch.load('Results/MOT16/%s/%s/uphi_%d.pth'%(i_name, name, tail)).to(self.device)
+        self.Ephi = torch.load('Results/MOT16/%s/%s/ephi_%d.pth'%(i_name, name, tail)).to(self.device)
+        self.u = torch.load('Results/MOT16/%s/%s/u_%d.pth'%(i_name, name, tail))
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -239,7 +246,6 @@ class GN():
                 v1 = self.train_set.getApp(1, vs_index)
                 v2 = self.train_set.getApp(0, vr_index)
                 v2_ = rho * v1 + (1 - rho) * v2
-                self.train_set.detections[nxt][vr_index][0] = v2_.data
                 e_ = self.Ephi(e, v1, v2_, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -257,6 +263,12 @@ class GN():
                 # print (i,j)
                 if ret[i][j] >= tau_threshold:
                     continue
+
+                v1 = self.train_set.getApp(1, i)
+                v2 = self.train_set.getApp(0, j)
+                v2_ = rho * v1 + (1 - rho) * v2
+                self.train_set.detections[nxt][vr_index][0] = v2_.data
+
                 id = id_con[self.cur][i]
                 id_con[self.nxt][j] = id
                 attr1 = line_con[self.cur][i]
@@ -302,6 +314,15 @@ class GN():
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.train_set.moveApp(index)
                     index += 1
+
+                if ret[i][j] >= tau_threshold:
+                    attrs = line_con[self.cur][index]
+                    # print '*', attrs, '*'
+                    if attrs[-1] + t_gap <= gap:
+                        attrs[-1] += t_gap
+                        line_con[self.nxt].append(attrs)
+                        id_con[self.nxt].append(id_con[self.cur][index])
+                        self.train_set.moveApp(index)
                 index += 1
             while index < m:
                 attrs = line_con[self.cur][index]
@@ -361,7 +382,7 @@ if __name__ == '__main__':
 
                 if tt_tag:
                     seq_dir = 'MOT%d-%02d-%s' % (year, test_seqs[i], type)
-                    sequence_dir = '..MOT/MOT%d/test/'%year + seq_dir
+                    sequence_dir = '../MOT/MOT%d/test/'%year + seq_dir
                     print ' ', sequence_dir
 
                     start = time.time()
@@ -369,7 +390,7 @@ if __name__ == '__main__':
                     gn = GN(test_seqs[i], test_lengths[i])
                 else:
                     seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
-                    sequence_dir = '..MOT/MOT%d/train/'%year + seq_dir
+                    sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
                     print ' ', sequence_dir
 
                     start = time.time()

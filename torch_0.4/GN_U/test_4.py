@@ -54,7 +54,7 @@ class GN():
         print '     Loading the model...'
         self.loadModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_4_2/'%type
+        self.out_dir = t_dir + 'motmetrics_%s_4/'%type
 
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
@@ -127,10 +127,17 @@ class GN():
 
     def loadModel(self):
         name = 'all_4'
+
         tail = 10
-        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_%02d.pth'%(name, tail)).to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_%02d.pth'%(name, tail)).to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/%s/u_%02d.pth'%(name, tail))
+        if edge_initial == 1:
+            i_name = 'Random'
+        elif edge_initial == 0:
+            i_name = 'IoU'
+        elif edge_initial == 3:
+            i_name = 'Equal'
+        self.Uphi = torch.load('Results/MOT16/%s/%s/uphi_%d.pth'%(i_name, name, tail)).to(self.device)
+        self.Ephi = torch.load('Results/MOT16/%s/%s/ephi_%d.pth'%(i_name, name, tail)).to(self.device)
+        self.u = torch.load('Results/MOT16/%s/%s/u_%d.pth'%(i_name, name, tail))
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -319,6 +326,15 @@ class GN():
                             id_con[self.nxt].append(id_con[self.cur][index])
                             self.train_set.moveApp(index)
                         index += 1
+
+                    if ret[i][j] >= tau_threshold:
+                        attrs = line_con[self.cur][index]
+                        # print '*', attrs, '*'
+                        if attrs[-1] + t_gap <= gap:
+                            attrs[-1] += t_gap
+                            line_con[self.nxt].append(attrs)
+                            id_con[self.nxt].append(id_con[self.cur][index])
+                            self.train_set.moveApp(index)
                     index += 1
                 while index < m:
                     attrs = line_con[self.cur][index]

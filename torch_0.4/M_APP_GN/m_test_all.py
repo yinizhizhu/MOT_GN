@@ -1,11 +1,11 @@
 # from __future__ import print_function
 import numpy as np
-from m_mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil, gc
+import time, os, shutil
 from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
 from m_test_dataset import DatasetFromFolder
+from m_mot_model import *
 
 torch.manual_seed(123)
 np.random.seed(123)
@@ -50,6 +50,7 @@ class GN():
         self.loadModel()
 
         self.out_dir = t_dir + 'motmetrics_%s/'%type
+
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
@@ -117,10 +118,16 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = 'all_6'
-        self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_13.pth'%name).to(self.device)
-        self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_13.pth'%name).to(self.device)
-        self.u = torch.load('Results/MOT16/IoU/%s/u_13.pth'%name)
+        name = 'all_7'
+
+        if edge_initial == 1:
+            i_name = 'Random/'
+        elif edge_initial == 0:
+            i_name = 'IoU/'
+
+        self.Uphi = torch.load('Results/MOT16/%s/%s/uphi_13.pth'%(i_name, name)).to(self.device)
+        self.Ephi = torch.load('Results/MOT16/%s/%s/ephi_13.pth'%(i_name, name)).to(self.device)
+        self.u = torch.load('Results/MOT16/%s/%s/u_13.pth'%(i_name, name))
         self.u = self.u.to(self.device)
 
     def swapFC(self):
@@ -237,8 +244,8 @@ class GN():
                 if ret[vs_index][vr_index] == 1.0:
                     continue
                 e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getMotion(1, vs_index).to(self.device)
-                v2 = self.train_set.getMotion(0, vr_index, vs_index, line_con[self.cur][vs_index][-1]).to(self.device)
+                v1 = self.train_set.getMApp(1, vs_index).to(self.device)
+                v2 = self.train_set.getMApp(0, vr_index, vs_index, line_con[self.cur][vs_index][-1]).to(self.device)
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -309,8 +316,17 @@ class GN():
                         attrs[-1] += t_gap
                         line_con[self.nxt].append(attrs)
                         id_con[self.nxt].append(id_con[self.cur][index])
-                        self.train_set.moveMotion(index)
+                        self.train_set.moveMApp(index)
                     index += 1
+
+                if ret[i][j] >= tau_threshold:
+                    attrs = line_con[self.cur][index]
+                    # print '*', attrs, '*'
+                    if attrs[-1] + t_gap <= gap:
+                        attrs[-1] += t_gap
+                        line_con[self.nxt].append(attrs)
+                        id_con[self.nxt].append(id_con[self.cur][index])
+                        self.train_set.moveMApp(index)
                 index += 1
             while index < m:
                 attrs = line_con[self.cur][index]
@@ -319,7 +335,7 @@ class GN():
                     attrs[-1] += t_gap
                     line_con[self.nxt].append(attrs)
                     id_con[self.nxt].append(id_con[self.cur][index])
-                    self.train_set.moveMotion(index)
+                    self.train_set.moveMApp(index)
                 index += 1
 
             # con = self.train_set.cleanEdge()

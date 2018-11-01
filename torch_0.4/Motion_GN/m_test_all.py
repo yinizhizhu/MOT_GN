@@ -1,11 +1,11 @@
 # from __future__ import print_function
 import numpy as np
-from m_mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil, gc
+import time, os, shutil
 from m_global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
 from m_test_dataset import DatasetFromFolder
+from m_mot_model import *
 
 torch.manual_seed(123)
 np.random.seed(123)
@@ -49,7 +49,8 @@ class GN():
         print '     Loading the model...'
         self.loadModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s/'%type
+        self.out_dir = t_dir + 'motmetrics_%s_v2/'%type
+
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
@@ -117,7 +118,8 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = 'all_6'
+        name = 'all_v2_7'
+
         self.Uphi = torch.load('Results/MOT16/IoU/%s/uphi_13.pth'%name).to(self.device)
         self.Ephi = torch.load('Results/MOT16/IoU/%s/ephi_13.pth'%name).to(self.device)
         self.u = torch.load('Results/MOT16/IoU/%s/u_13.pth'%name)
@@ -237,8 +239,8 @@ class GN():
                 if ret[vs_index][vr_index] == 1.0:
                     continue
                 e = e.to(self.device).view(1,-1)
-                v1 = self.train_set.getMotion(1, vs_index).to(self.device)
-                v2 = self.train_set.getMotion(0, vr_index, vs_index, line_con[self.cur][vs_index][-1]).to(self.device)
+                v1 = self.train_set.getMotion(1, vs_index)
+                v2 = self.train_set.getMotion(0, vr_index, vs_index, line_con[self.cur][vs_index][-1])
                 e_ = self.Ephi(e, v1, v2, u_)
                 self.train_set.edges[vs_index][vr_index] = e_.data.view(-1)
                 tmp = F.softmax(e_)
@@ -311,6 +313,15 @@ class GN():
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.train_set.moveMotion(index)
                     index += 1
+
+                if ret[i][j] >= tau_threshold:
+                    attrs = line_con[self.cur][index]
+                    # print '*', attrs, '*'
+                    if attrs[-1] + t_gap <= gap:
+                        attrs[-1] += t_gap
+                        line_con[self.nxt].append(attrs)
+                        id_con[self.nxt].append(id_con[self.cur][index])
+                        self.train_set.moveMotion(index)
                 index += 1
             while index < m:
                 attrs = line_con[self.cur][index]
@@ -343,6 +354,9 @@ class GN():
 
 if __name__ == '__main__':
     try:
+        if not os.path.exists('Results/'):
+            os.mkdir('Results/')
+
         types = ['DPM', 'SDP', 'FRCNN']
         for t in types:
             type = t

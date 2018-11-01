@@ -2,7 +2,7 @@
 import numpy as np
 from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil, torch
+import time, os, shutil, torch, cv2
 from global_set import edge_initial, test_gt_det, tau_conf_score, tau_threshold, gap, f_gap, show_recovering
 from mot_model import appearance
 from test_dataset import ADatasetFromFolder
@@ -10,6 +10,20 @@ from m_test_dataset import MDatasetFromFolder
 
 torch.manual_seed(123)
 np.random.seed(123)
+font = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def readImg(filename):
+    """"
+    Color image loaded by OpenCV is in BGR mode, but Matplotlib displays in RGB mode.
+    cv2.imread(path, style)
+        1 - cv2.IMREAD_COLOR
+        0 - cv2.IMREAD_GRAYSCALE
+        -1 - cv2.IMREAD_UNCHANGED
+    """
+    # print filename
+    img = cv2.imread(filename, 1)
+    return img
 
 
 def deleteDir(del_dir):
@@ -27,13 +41,13 @@ sequence_dir = ''  # the dir of the training dataset
 # test_seqs = [1, 3, 6, 7, 8, 12, 14]
 # test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
 
-seqs = [9, 11, 13]
-lengths = [525, 900, 750]
+seqs = [4]
+lengths = [1050]
 
-test_seqs = [9, 11, 13]
-test_lengths = [525, 900, 750]
+test_seqs = [3]
+test_lengths = [1500]
 
-tt_tag = 0  # 1 - test, 0 - train
+tt_tag = 1  # 1 - test, 0 - train
 
 ALPHA_TAG = None  # 1 - a*A+(1-a)*M, 2 - a*A+M, 3 - A+a*M
 
@@ -59,22 +73,30 @@ class GN():
         self.loadAModel()
         self.loadMModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_v2_4_%.1f_%d/'%(type, a, 2)
+        self.out_dir = t_dir + 'motmetrics_%s_show/'%(type)
         print '		', self.out_dir
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
             deleteDir(self.out_dir)
             os.mkdir(self.out_dir)
+        self.initWin()
         self.initOut()
+
+    def initWin(self):
+        self.color = [(255,0,0),(0,255,0),(0,0,255)]
+        self.img_dir = '../MOT/MOT16/test/MOT16-%02d/img1/'%self.seq_index
+        self.pre_win = 'Show/Previous'
+
+        self.cur_win = 'Show/Current'
 
     def initOut(self):
         print '     Loading Data...'
-        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
-        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
+        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index)
+        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index)
 
-        gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
-        self.copyLines(self.seq_index, 1, gt_training, self.tt)
+        # gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
+        # self.copyLines(self.seq_index, 1, gt_training, self.tt)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -139,7 +161,7 @@ class GN():
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'Appearance'
-            name = 'all_4_CE'
+            name = 'all_7_CE'
             i_name = 'Random'
         tail = 10
         self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%02d.pth'%(model_dir, i_name, name, tail)).to(self.device)
@@ -155,7 +177,7 @@ class GN():
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'Motion'
-            name = 'all_4_CE'
+            name = 'all_7_CE'
             i_name = 'Random'
         tail = 10
         self.MUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
@@ -216,6 +238,10 @@ class GN():
         '''
         gtIn = open(gtFile, 'r')
         self.cur, self.nxt = 0, 1
+
+        imgs = [None, None]     # 0 - previous img, 1 - current img
+        going_tag = 0           # 0 - frame by frame, 1 - goto going_f
+
         line_con = [[], []]
         id_con = [[], []]
         id_step = 1
@@ -227,8 +253,13 @@ class GN():
             print 'a_step =', a_step, ', m_step =', m_step
             raw_input('Continue?')
 
+        imgs[self.cur] = readImg(self.img_dir + '%06d.jpg'%a_step)
+        going_f = a_step
         while a_step < tail:
             # print '*********************************'
+            if going_f <= a_step:
+                going_tag = 0
+
             a_t_gap = self.a_train_set.loadNext()
             m_t_gap = self.m_train_set.loadNext()
             if a_t_gap != m_t_gap:
@@ -274,16 +305,29 @@ class GN():
                             line = line[:-1]
                         print >> out, line
                         self.bbx_counter += 1
+
+                        # draw the rectangle
+                        x, y = int(float(attrs[2])), int(float(attrs[3]))
+                        w, h = int(float(attrs[4])), int(float(attrs[5]))
+                        cv2.rectangle(imgs[self.cur], (x, y), (x+w, y+h), self.color[0], 2)
+                        cv2.putText(imgs[self.cur], attrs[1]+'_B', (x+3, y+15), font, 0.6, self.color[0], 2, cv2.LINE_AA)
+
                         line_con[self.cur].append(attrs)
                         id_con[self.cur].append(id_step)
                         id_step += 1
                         i += 1
                 out.close()
 
+            print '     Frame:', a_step
+            print id_con[self.cur]
+            imgs[self.nxt] = readImg(self.img_dir + '%06d.jpg' % a_step)
             i = 0
             while i < a_n:
                 attrs = gtIn.readline().strip().split(',')
                 if float(attrs[6]) >= tau_conf_score:
+                    # if int(attrs[0]) != a_step:
+                    #     print attrs
+                    #     print 'Something is Wrong! %d != %d'%(int(attrs[0]), a_step)
                     attrs.append(1)
                     line_con[self.nxt].append(attrs)
                     id_con[self.nxt].append(-1)
@@ -340,10 +384,9 @@ class GN():
                 id_con[self.nxt][j] = id
                 attr1 = line_con[self.cur][i]
                 attr2 = line_con[self.nxt][j]
-                # print attrs
                 attr2[1] = str(id)
                 if attr1[-1] > 1:
-                    # for the missing detections
+                    # for the missing detections & side connection
                     self.linearModel(out, attr1, attr2)
                 line = ''
                 for attr in attr2[:-1]:
@@ -354,14 +397,20 @@ class GN():
                     line = line[:-1]
                 print >> out, line
                 self.bbx_counter += 1
+                if id==23:
+                    print id_con[self.nxt][j], line_con[self.nxt][j]
 
             for j in look_up:
                 self.m_train_set.updateVelocity(-1, j, tag=False)
 
             for i in xrange(a_n):
+                attrs = line_con[self.nxt][i]
+                color = self.color[1]
+                state = '_C'
                 if id_con[self.nxt][i] == -1:
+                    color = self.color[0]
+                    state = '_B'
                     id_con[self.nxt][i] = id_step
-                    attrs = line_con[self.nxt][i]
                     attrs[1] = str(id_step)
                     line = ''
                     for attr in attrs[:-1]:
@@ -373,12 +422,77 @@ class GN():
                     print >> out, line
                     self.bbx_counter += 1
                     id_step += 1
+
+                # if i not in look_up:
+                #     color = self.color[2]
+                #     state = '_M'
+
+                # draw the rectrangle
+                x, y = int(float(attrs[2])), int(float(attrs[3]))
+                w, h = int(float(attrs[4])), int(float(attrs[5]))
+                cv2.rectangle(imgs[self.nxt], (x, y), (x+w, y+h), color, 2)
+                cv2.putText(imgs[self.nxt], attrs[1]+state, (x+3, y+15), font, 0.6, color, 2, cv2.LINE_AA)
+
             out.close()
+
+            # visualization
+            cv2.imwrite(self.pre_win + '.png', imgs[self.cur])
+            cv2.imwrite(self.cur_win + '.png', imgs[self.nxt])
+            for i in xrange(a_m):
+                if id_con[self.cur][i] == 23:
+                    print line_con[self.cur][i]
+                    break
+            if going_tag == 0:
+                id1, id2 = 1, 1
+                while id1 != -1:
+                    inp = raw_input('Input:')
+                    if ',' in inp:
+                        nums = inp.split(',')
+                        id1, id2 = int(nums[0]), int(nums[1])
+                        if id1 != -1:
+                            id_tag = int(nums[2])
+                            if id_tag:
+                                # t -> t-1
+                                for i in xrange(a_n):
+                                    if id_con[self.nxt][i] == id1:
+                                        id1 = i
+                                        break
+                                for i in xrange(a_m):
+                                    if id_con[self.cur][i] == id2:
+                                        id2 = i
+                                        break
+                                print ret[id2][id1]
+                            else:
+                                # t-1 -> t
+                                for i in xrange(a_n):
+                                    if id_con[self.cur][i] == id1:
+                                        id1 = i
+                                        break
+                                for i in xrange(a_m):
+                                    if id_con[self.nxt][i] == id2:
+                                        id2 = i
+                                        break
+                                print ret[id1][id2]
+                        else:
+                            going_tag = 1
+                            going_f = id2
+                    else:
+                        id1 = int(inp)
+                        if id1 != -1:
+                            for i in xrange(a_n):
+                                if id_con[self.nxt][i] == id1:
+                                    id1 = i
+                                    break
+                            for i in xrange(a_n):
+                                if ret[i][id1] != 1:
+                                    print id_con[self.cur][i], ret[i][id1]
 
             # For missing & Occlusion
             index = 0
             for (i, j) in results:
                 while i != index:
+                    # if a_step > 80:
+                    #     print id_con[self.cur][index], line_con[self.cur][index]
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
                     if attrs[-1] + a_t_gap <= gap:
@@ -388,7 +502,10 @@ class GN():
                         self.a_train_set.moveApp(index)
                         self.m_train_set.moveMotion(index)
                     index += 1
+
                 if ret[i][j] >= tau_threshold:
+                    # if a_step > 80:
+                    #     print id_con[self.cur][index], line_con[self.cur][index]
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
                     if attrs[-1] + a_t_gap <= gap:
@@ -397,8 +514,11 @@ class GN():
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.a_train_set.moveApp(index)
                         self.m_train_set.moveMotion(index)
+
                 index += 1
             while index < a_m:
+                if a_step > 80:
+                    print id_con[self.cur][index], line_con[self.cur][index]
                 attrs = line_con[self.cur][index]
                 # print '*', attrs, '*'
                 if attrs[-1] + a_t_gap <= gap:
@@ -417,6 +537,8 @@ class GN():
 
             line_con[self.cur] = []
             id_con[self.cur] = []
+            cv2.imwrite('Show/%06d.png'%(a_step-1), imgs[self.cur])
+            imgs[self.cur] = []
             # print head+step, results
             self.a_train_set.swapFC()
             self.m_train_set.swapFC()
@@ -435,11 +557,12 @@ if __name__ == '__main__':
         for x in xrange(1, 2):
             ALPHA_TAG = x
             start_a = time.time()
-            for a in xrange(1, 10):
+            for a in xrange(7, 8):
                 if not os.path.exists('Results/'):
                     os.mkdir('Results/')
 
-                types = ['DPM', 'SDP', 'FRCNN']
+                # types = ['DPM', 'SDP', 'FRCNN']
+                types = ['FRCNN']
                 for t in types:
                     type = t
                     head = time.time()
