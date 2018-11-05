@@ -4,7 +4,7 @@ from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil
 from global_set import edge_initial, test_gt_det, tau_conf_score,\
-    tau_threshold, gap, f_gap, show_recovering, decay
+    tau_threshold, gap, f_gap, show_recovering, decay, decay_dir, recover_dir, conf_dir
 from test_dataset import DatasetFromFolder
 from mot_model import *
 
@@ -21,14 +21,19 @@ type = ''
 t_dir = ''  # the dir of the final level
 sequence_dir = ''  # the dir of the training dataset
 
-seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
-lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+# seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
+# lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+#
+# test_seqs = [1, 3, 6, 7, 8, 12, 14]
+# test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
 
-test_seqs = [1, 3, 6, 7, 8, 12, 14]
-test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
+seqs = [9, 11, 13]
+lengths = [525, 900, 750]
 
+test_seqs = [9, 11, 13]
+test_lengths = [525, 900, 750]
 
-tt_tag = 1  # 1 - test, 0 - train
+tt_tag = 0  # 1 - test, 0 - train
 
 
 class GN():
@@ -50,7 +55,8 @@ class GN():
         print '     Loading the model...'
         self.loadModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s/'%type
+        self.out_dir = t_dir + 'motmetrics_%s_4%s_%.2f%s%s/'%(type, decay_dir, decay, recover_dir, conf_dir)
+        print self.out_dir
 
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
@@ -61,7 +67,10 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.train_set = DatasetFromFolder(sequence_dir, '..MOT/MOT16/test/MOT16-%02d'%self.seq_index)
+        self.train_set = DatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
+
+        gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
+        self.copyLines(self.seq_index, 1, gt_training, self.tt)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -92,9 +101,9 @@ class GN():
         :return: None
         '''
         if tt_tag:
-            basic_dir = '..MOT/MOT%d/test/MOT%d-%02d-%s/' % (year, year, seq, type)
+            basic_dir = '../MOT/MOT%d/test/MOT%d-%02d-%s/' % (year, year, seq, type)
         else:
-            basic_dir = '..MOT/MOT%d/train/MOT%d-%02d-%s/' % (year, year, seq, type)
+            basic_dir = '../MOT/MOT%d/train/MOT%d-%02d-%s/' % (year, year, seq, type)
         print '     Testing on', basic_dir, 'Length:', self.tt
         seqL = tail if tail != -1 else self.getSeqL(basic_dir + 'seqinfo.ini')
 
@@ -119,14 +128,14 @@ class GN():
         f.close()
 
     def loadModel(self):
-        name = 'all_7'
+        name = 'all_4'
 
         if edge_initial == 1:
             i_name = 'Random/'
         elif edge_initial == 0:
             i_name = 'IoU/'
 
-        tail = 13
+        tail = 10
         self.Uphi = torch.load('Results/MOT16/%s/%s/uphi_%02d.pth'%(i_name, name, tail)).to(self.device)
         self.Vphi = torch.load('Results/MOT16/%s/%s/vphi_%02d.pth'%(i_name, name, tail)).to(self.device)
         self.Ephi1 = torch.load('Results/MOT16/%s/%s/ephi1_%02d.pth'%(i_name, name, tail)).to(self.device)
@@ -403,14 +412,18 @@ class GN():
                 # print '^.^|', step, tail
             gtIn.close()
 
-        # tra_tst = 'training sets' if head == 1 else 'validation sets'
-        # out = open(outFile, 'a')
-        # print >> out, tra_tst
-        # out.close()
+            # tra_tst = 'training sets' if head == 1 else 'validation sets'
+            # out = open(outFile, 'a')
+            # print >> out, tra_tst
+            # out.close()
 
 if __name__ == '__main__':
     try:
-        types = ['DPM', 'SDP', 'FRCNN']
+        if not os.path.exists('Results/'):
+            os.mkdir('Results/')
+
+        types = ['DPM', 'DPMF1', 'DPMF2', 'SDP', 'FRCNN']
+        # types = ['FRCNN']
         for t in types:
             type = t
             head = time.time()
@@ -444,7 +457,7 @@ if __name__ == '__main__':
 
                 if tt_tag:
                     seq_dir = 'MOT%d-%02d-%s' % (year, test_seqs[i], type)
-                    sequence_dir = '..MOT/MOT%d/test/'%year + seq_dir
+                    sequence_dir = '../MOT/MOT%d/test/'%year + seq_dir
                     print ' ', sequence_dir
 
                     start = time.time()
@@ -452,7 +465,7 @@ if __name__ == '__main__':
                     gn = GN(test_seqs[i], test_lengths[i])
                 else:
                     seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
-                    sequence_dir = '..MOT/MOT%d/train/'%year + seq_dir
+                    sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
                     print ' ', sequence_dir
 
                     start = time.time()
