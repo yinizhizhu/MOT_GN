@@ -2,15 +2,28 @@
 import numpy as np
 from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil, torch
-from global_set import edge_initial, test_gt_det, tau_threshold, \
-    gap, f_gap, show_recovering, decay, decay_dir, recover_dir, app_dir, u_update, u_dir#, tau_conf_score
+import time, os, shutil, torch, cv2
+from global_set import edge_initial, test_gt_det, tau_threshold, gap, f_gap, show_recovering, app_dir, u_update, decay
 from mot_model import appearance
 from test_dataset import ADatasetFromFolder
 from m_test_dataset import MDatasetFromFolder
 
 torch.manual_seed(123)
 np.random.seed(123)
+font = cv2.FONT_HERSHEY_SIMPLEX
+
+
+def readImg(filename):
+    """"
+    Color image loaded by OpenCV is in BGR mode, but Matplotlib displays in RGB mode.
+    cv2.imread(path, style)
+        1 - cv2.IMREAD_COLOR
+        0 - cv2.IMREAD_GRAYSCALE
+        -1 - cv2.IMREAD_UNCHANGED
+    """
+    # print filename
+    img = cv2.imread(filename, 1)
+    return img
 
 
 def deleteDir(del_dir):
@@ -28,16 +41,17 @@ sequence_dir = ''  # the dir of the training dataset
 # test_seqs = [1, 3, 6, 7, 8, 12, 14]
 # test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
 
-seqs = [9, 11, 13]
-lengths = [525, 900, 750]
+seqs = [2]
+lengths = [600]
 
-test_seqs = [9, 11, 13]
-test_lengths = [525, 900, 750]
+test_seqs = [1]
+test_lengths = [450]
 
-tt_tag = 0  # 1 - test, 0 - train
+tt_tag = 1  # 1 - test, 0 - train
 
-tau_conf_score = 0.0
+ALPHA_TAG = None  # 1 - a*A+(1-a)*M, 2 - a*A+M, 3 - A+a*M
 
+tau_conf_score = 0.5
 
 class GN():
     def __init__(self, seq_index, tt, a, cuda=True):
@@ -61,25 +75,30 @@ class GN():
         self.loadAModel()
         self.loadMModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_tau_tdir1.0/'%(type,
-                                                                               self.alpha,
-                                                                               decay_dir, decay,
-                                                                               recover_dir, u_dir)
+        self.out_dir = t_dir + 'motmetrics_%s_show/'%(type)
         print '		', self.out_dir
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
         else:
             deleteDir(self.out_dir)
             os.mkdir(self.out_dir)
+        self.initWin()
         self.initOut()
+
+    def initWin(self):
+        self.color = [(255,0,0),(0,255,0),(0,0,255)]
+        self.img_dir = '../MOT/MOT16/test/MOT16-%02d/img1/'%self.seq_index
+        self.pre_win = 'Show/p0'
+
+        self.cur_win = 'Show/p1'
 
     def initOut(self):
         print '     Loading Data...'
-        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
-        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
 
-        gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
-        self.copyLines(self.seq_index, 1, gt_training, self.tt)
+        # gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
+        # self.copyLines(self.seq_index, 1, gt_training, self.tt)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -137,16 +156,16 @@ class GN():
         f.close()
 
     def loadAModel(self):
-        from mot_model import uphi, ephi, vphi
+        from mot_model import uphi, ephi
         if edge_initial == 0:
             model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
+            name = '%s_7'%app_dir
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
+            name = '%s_7'%app_dir
             i_name = 'Random'
-        tail = 10
+        tail = 13
         self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%02d.pth'%(model_dir, i_name, name, tail)).to(self.device)
         self.AVphi = torch.load('../%s/Results/MOT16/%s/%s/vphi_%02d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.AEphi1 = torch.load('../%s/Results/MOT16/%s/%s/ephi1_%02d.pth'%(model_dir,i_name, name, tail)).to(self.device)
@@ -158,13 +177,13 @@ class GN():
         from m_mot_model import uphi, ephi
         if edge_initial == 0:
             model_dir = 'Motion1_bb'
-            name = 'all_4'
+            name = 'all_7'
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'Motion1_bb'
-            name = 'all_4'
+            name = 'all_7'
             i_name = 'Random'
-        tail = 10
+        tail = 13
         self.MUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.MEphi = torch.load('../%s/Results/MOT16/%s/%s/ephi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.Mu = torch.load('../%s/Results/MOT16/%s/%s/u_%d.pth'%(model_dir,i_name, name, tail))
@@ -223,6 +242,10 @@ class GN():
         '''
         gtIn = open(gtFile, 'r')
         self.cur, self.nxt = 0, 1
+
+        imgs = [None, None]     # 0 - previous img, 1 - current img
+        going_tag = 0           # 0 - frame by frame, 1 - goto going_f
+
         line_con = [[], []]
         id_con = [[], []]
         id_step = 1
@@ -234,8 +257,13 @@ class GN():
             print 'a_step =', a_step, ', m_step =', m_step
             raw_input('Continue?')
 
+        imgs[self.cur] = readImg(self.img_dir + '%06d.jpg'%a_step)
+        going_f = a_step
         while a_step < tail:
             # print '*********************************'
+            if going_f <= a_step:
+                going_tag = 0
+
             a_t_gap = self.a_train_set.loadNext()
             m_t_gap = self.m_train_set.loadNext()
             if a_t_gap != m_t_gap:
@@ -280,16 +308,29 @@ class GN():
                             line = line[:-1]
                         print >> out, line
                         self.bbx_counter += 1
+
+                        # draw the rectangle
+                        x, y = int(float(attrs[2])), int(float(attrs[3]))
+                        w, h = int(float(attrs[4])), int(float(attrs[5]))
+                        cv2.rectangle(imgs[self.cur], (x, y), (x+w, y+h), self.color[0], 2)
+                        cv2.putText(imgs[self.cur], attrs[1]+'_B', (x+3, y+15), font, 0.6, self.color[0], 2, cv2.LINE_AA)
+
                         line_con[self.cur].append(attrs)
                         id_con[self.cur].append(id_step)
                         id_step += 1
                         i += 1
                 out.close()
 
+            print '     Frame:', a_step
+            print id_con[self.cur]
+            imgs[self.nxt] = readImg(self.img_dir + '%06d.jpg' % a_step)
             i = 0
             while i < a_n:
                 attrs = gtIn.readline().strip().split(',')
                 if float(attrs[6]) >= tau_conf_score:
+                    # if int(attrs[0]) != a_step:
+                    #     print attrs
+                    #     print 'Something is Wrong! %d != %d'%(int(attrs[0]), a_step)
                     attrs.append(1)
                     line_con[self.nxt].append(attrs)
                     id_con[self.nxt].append(-1)
@@ -331,7 +372,14 @@ class GN():
                     print 'a_vs_index = %d, m_vs_index = %d'%(a_vs_index, m_vs_index)
                     print 'a_vr_index = %d, m_vr_index = %d'%(a_vr_index, m_vr_index)
                     raw_input('Continue?')
+
+                # if id_con[self.cur][a_vs_index] == 6 and a_step == 38:
+                #     print '     ******'
+                #     print ' Pre-ret[%d][*]'%id_con[self.cur][a_vs_index], ret[a_vs_index][a_vr_index],
+
                 if ret[a_vs_index][a_vr_index] == tau_threshold:
+                    # if id_con[self.cur][a_vs_index] == 6 and a_step == 38:
+                    #     print ''
                     continue
 
                 e2 = self.AEphi2(e1, vs, vr1, u1)
@@ -349,15 +397,17 @@ class GN():
                 m_tmp = m_tmp.cpu().data.numpy()[0]
 
                 t = line_con[self.cur][a_vs_index][-1]
-                # A = float(a_tmp[0]) * pow(decay, t-1)
-                # M = float(m_tmp[0]) * pow(decay, t-1)
-                if decay_tag[a_vs_index] > 0:
+                if decay_tag[a_vs_index] > 2:
                     A = min(float(a_tmp[0]) * pow(decay, t-1), 1.0)
                     M = min(float(m_tmp[0]) * pow(decay, t-1), 1.0)
                 else:
                     A = float(a_tmp[0])
                     M = float(m_tmp[0])
                 ret[a_vs_index][a_vr_index] = A*self.alpha + M*(1-self.alpha)
+                # if id_con[self.cur][a_vs_index] == 6 and a_step == 38:
+                #     print ' Cur-ret[%d][*]'%id_con[self.cur][a_vs_index], ret[a_vs_index][a_vr_index]
+                #     print ' The a is:%f, b is:%f' % (a_tmp[0], m_tmp[0])
+                #     print ' The A is:%f, B is:%f' % (A, M)
 
             # self.a_train_set.showE(outFile)
             # self.m_train_set.showE(outFile)
@@ -387,10 +437,9 @@ class GN():
                 id_con[self.nxt][j] = id
                 attr1 = line_con[self.cur][i]
                 attr2 = line_con[self.nxt][j]
-                # print attrs
                 attr2[1] = str(id)
                 if attr1[-1] > 1:
-                    # for the missing detections
+                    # for the missing detections & side connection
                     self.linearModel(out, attr1, attr2)
                 line = ''
                 for attr in attr2[:-1]:
@@ -410,9 +459,13 @@ class GN():
                 self.m_train_set.updateVelocity(-1, j, tag=False)
 
             for i in xrange(a_n):
+                attrs = line_con[self.nxt][i]
+                color = self.color[1]
+                state = '_C'
                 if id_con[self.nxt][i] == -1:
+                    color = self.color[0]
+                    state = '_B'
                     id_con[self.nxt][i] = id_step
-                    attrs = line_con[self.nxt][i]
                     attrs[1] = str(id_step)
                     line = ''
                     for attr in attrs[:-1]:
@@ -424,12 +477,124 @@ class GN():
                     print >> out, line
                     self.bbx_counter += 1
                     id_step += 1
+
+                # if i not in look_up:
+                #     color = self.color[2]
+                #     state = '_M'
+
+                # draw the rectrangle
+                x, y = int(float(attrs[2])), int(float(attrs[3]))
+                w, h = int(float(attrs[4])), int(float(attrs[5]))
+                cv2.rectangle(imgs[self.nxt], (x, y), (x+w, y+h), color, 2)
+                cv2.putText(imgs[self.nxt], attrs[1]+state, (x+3, y+15), font, 0.6, color, 2, cv2.LINE_AA)
+
             out.close()
+
+            # visualization
+            cv2.imwrite(self.pre_win + '.png', imgs[self.cur])
+            cv2.imwrite(self.cur_win + '.png', imgs[self.nxt])
+            if going_tag == 0:
+                while True:
+                    inp = raw_input('Input(enter for next iteration):')
+                    print '     Your input is:', inp
+                    state = 3
+                    if len(inp):
+                        state = 1
+                        direction = int(raw_input('1 For T -> (T-1), 2 For (T-1) -> T, 3 For next iteration:'))
+                        if direction == 1:
+                            # T -> T-1
+                            print '     T -> (T-1)'
+                            check = int(raw_input('1 For Single, 2 - For Double'))
+                            tag1, tag2 = False, False
+                            if check == 1:
+                                id1 = int(raw_input('Input the ID1:'))
+                                print '     ', id1
+                                for i in xrange(a_n):
+                                    if id_con[self.nxt][i] == id1:
+                                        id1 = i
+                                        tag1 = True
+                                        break
+                                if tag1:
+                                    for i in xrange(a_m):
+                                        if ret[i][id1] < tau_threshold:
+                                            print '     ', id_con[self.cur][i], ret[i][id1]
+                                else:
+                                    print 'The %d is not in the current frame!'
+                            else:
+                                string = raw_input('Input the ID1,ID2:')
+                                string = string.split(',')
+                                id1, id2 = int(string[0]), int(string[1])
+                                print '     ', id1, id2
+                                for i in xrange(a_n):
+                                    if id_con[self.nxt][i] == id1:
+                                        id1 = i
+                                        tag1 = True
+                                        break
+
+                                for i in xrange(a_m):
+                                    if id_con[self.cur][i] == id2:
+                                        id2 = i
+                                        tag2 = True
+                                        break
+                                if tag1 and tag2:
+                                    print '     ', ret[id2][id1]
+                                else:
+                                    print 'The id1 or id2 is not in the list!'
+
+                        elif direction == 2:
+                            # T-1 -> T
+                            print  '        (T-1) -> T'
+                            check = int(raw_input('1 For Single, 2 - For Double'))
+                            if check == 1:
+                                id1 = int(raw_input('Input the ID1:'))
+                                print '     ', id1
+                                for i in xrange(a_m):
+                                    if id_con[self.cur][i] == id1:
+                                        id1 = i
+                                        tag1 = True
+                                        break
+                                if tag1:
+                                    for i in xrange(a_n):
+                                        if ret[id1][i] < tau_threshold:
+                                            print '     ', id_con[self.nxt][i], ret[id1][i]
+                                else:
+                                    print 'The %d is not in the previous frame!'%id1
+                            else:
+                                string = raw_input('Input the ID1,ID2:')
+                                string = string.split(',')
+                                id1, id2 = int(string[0]), int(string[1])
+                                print '     ', id1, id2
+                                for i in xrange(a_m):
+                                    if id_con[self.cur][i] == id1:
+                                        id1 = i
+                                        tag1 = True
+                                        break
+
+                                for i in xrange(a_n):
+                                    if id_con[self.nxt][i] == id2:
+                                        id2 = i
+                                        tag2 = True
+                                        break
+                                if tag1 and tag2:
+                                    print '     ', ret[id1][id2]
+                                else:
+                                    print 'The id1 or id2 is not in the list!'
+                        else:
+                            state = 3
+                            nxt_index = int(raw_input('The target frame(0 for next iteration):'))
+                            if nxt_index:
+                                going_f = nxt_index
+                                going_tag = 1
+
+                    if state == 3:
+                        break
 
             # For missing & Occlusion
             index = 0
             for (i, j) in results:
                 while i != index:
+                    # if a_step > 80:
+                    #     print id_con[self.cur][index], line_con[self.cur][index]
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
                     if attrs[-1] + a_t_gap <= gap:
@@ -439,7 +604,10 @@ class GN():
                         self.a_train_set.moveApp(index)
                         self.m_train_set.moveMotion(index)
                     index += 1
+
                 if ret[i][j] >= tau_threshold:
+                    # if a_step > 80:
+                    #     print id_con[self.cur][index], line_con[self.cur][index]
                     attrs = line_con[self.cur][index]
                     # print '*', attrs, '*'
                     if attrs[-1] + a_t_gap <= gap:
@@ -448,8 +616,11 @@ class GN():
                         id_con[self.nxt].append(id_con[self.cur][index])
                         self.a_train_set.moveApp(index)
                         self.m_train_set.moveMotion(index)
+
                 index += 1
             while index < a_m:
+                # if a_step > 80:
+                #     print id_con[self.cur][index], line_con[self.cur][index]
                 attrs = line_con[self.cur][index]
                 # print '*', attrs, '*'
                 if attrs[-1] + a_t_gap <= gap:
@@ -468,6 +639,8 @@ class GN():
 
             line_con[self.cur] = []
             id_con[self.cur] = []
+            cv2.imwrite('Show/%06d.png'%(a_step-1), imgs[self.cur])
+            imgs[self.cur] = []
             # print head+step, results
             self.a_train_set.swapFC()
             self.m_train_set.swapFC()
@@ -482,67 +655,69 @@ class GN():
 
 if __name__ == '__main__':
     try:
-        start_a = time.time()
-        for a in xrange(7, 8):
-            if not os.path.exists('Results/'):
-                os.mkdir('Results/')
+        start_x = time.time()
+        for x in xrange(1, 2):
+            ALPHA_TAG = x
+            start_a = time.time()
+            for a in xrange(7, 8):
+                if not os.path.exists('Results/'):
+                    os.mkdir('Results/')
 
-            # types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
-            # types = [['DPM0', -0.6]]
-            # types = [['SDP', 0.5]]
-            types = [['FRCNN', 0.5]]
-            for t in types:
-                type, tau_conf_score = t
-                head = time.time()
-                f_dir = 'Results/MOT%s/' % year
-                if not os.path.exists(f_dir):
-                    os.mkdir(f_dir)
+                # types = ['DPM0', 'SDP', 'FRCNN']
+                types = [['DPM0', -0.6]]
+                for t in types:
+                    type, tau_conf_score = t
+                    head = time.time()
+                    f_dir = 'Results/MOT%s/' % year
+                    if not os.path.exists(f_dir):
+                        os.mkdir(f_dir)
 
-                if edge_initial == 1:
-                    f_dir += 'Random/'
-                elif edge_initial == 0:
-                    f_dir += 'IoU/'
+                    if edge_initial == 1:
+                        f_dir += 'Random/'
+                    elif edge_initial == 0:
+                        f_dir += 'IoU/'
 
-                if not os.path.exists(f_dir):
-                    os.mkdir(f_dir)
-                    print f_dir, 'does not exist!'
+                    if not os.path.exists(f_dir):
+                        os.mkdir(f_dir)
+                        print f_dir, 'does not exist!'
 
-                for i in xrange(len(seqs)):
-                    seq_index = seqs[i]
-                    tt = lengths[i]
-                    print 'The sequence:', seq_index, '- The length of the training data:', tt
+                    for i in xrange(len(seqs)):
+                        seq_index = seqs[i]
+                        tt = lengths[i]
+                        print 'The sequence:', seq_index, '- The length of the training data:', tt
 
-                    s_dir = f_dir + '%02d/' % seq_index
-                    if not os.path.exists(s_dir):
-                        os.mkdir(s_dir)
-                        print s_dir, 'does not exist!'
+                        s_dir = f_dir + '%02d/' % seq_index
+                        if not os.path.exists(s_dir):
+                            os.mkdir(s_dir)
+                            print s_dir, 'does not exist!'
 
-                    t_dir = s_dir + '%d/' % tt
-                    if not os.path.exists(t_dir):
-                        os.mkdir(t_dir)
-                        print t_dir, 'does not exist!'
+                        t_dir = s_dir + '%d/' % tt
+                        if not os.path.exists(t_dir):
+                            os.mkdir(t_dir)
+                            print t_dir, 'does not exist!'
 
-                    if tt_tag:
-                        seq_dir = 'MOT%d-%02d-%s' % (year, test_seqs[i], type)
-                        sequence_dir = '../MOT/MOT%d/test/'%year + seq_dir
-                        print ' ', sequence_dir
+                        if tt_tag:
+                            seq_dir = 'MOT%d-%02d-%s' % (year, test_seqs[i], type)
+                            sequence_dir = '../MOT/MOT%d/test/'%year + seq_dir
+                            print ' ', sequence_dir
 
-                        start = time.time()
-                        print '     Evaluating Graph Network...'
-                        gn = GN(test_seqs[i], test_lengths[i], a/10.0)
-                    else:
-                        seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
-                        sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
-                        print ' ', sequence_dir
+                            start = time.time()
+                            print '     Evaluating Graph Network...'
+                            gn = GN(test_seqs[i], test_lengths[i], a/10.0)
+                        else:
+                            seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
+                            sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
+                            print ' ', sequence_dir
 
-                        start = time.time()
-                        print '     Evaluating Graph Network...'
-                        gn = GN(seqs[i], lengths[i], a/10.0)
-                        print '     Recover the number missing detections:', gn.missingCounter
-                        print '     The number of sideConnections:', gn.sideConnection
-                    print 'Time consuming:', (time.time()-start)/60.0
-                print 'Time consuming:', (time.time()-head)/60.0
-            print 'Total time consuming:', (time.time()-start_a)/60.0
+                            start = time.time()
+                            print '     Evaluating Graph Network...'
+                            gn = GN(seqs[i], lengths[i], a/10.0)
+                            print '     Recover the number missing detections:', gn.missingCounter
+                            print '     The number of sideConnections:', gn.sideConnection
+                        print 'Time consuming:', (time.time()-start)/60.0
+                    print 'Time consuming:', (time.time()-head)/60.0
+                print 'Total time consuming:', (time.time()-start_a)/60.0
+            print 'Final time consuming:', (time.time()-start_x)/60.0
     except KeyboardInterrupt:
         print 'Time consuming:', (time.time()-start)/60.0
         print ''

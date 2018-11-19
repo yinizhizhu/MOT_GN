@@ -4,8 +4,8 @@ from m_mot_model import *
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil
-from global_set import edge_initial, test_gt_det, tau_conf_score,\
-    tau_threshold, gap, f_gap, show_recovering, decay, decay_dir, recover_dir
+from global_set import edge_initial, test_gt_det,\
+    tau_threshold, gap, f_gap, show_recovering, decay, app_dir, recover_dir, u_update, u_dir#, tau_conf_score
 from mot_model import appearance
 from test_dataset import ADatasetFromFolder
 from m_test_dataset import MDatasetFromFolder
@@ -31,6 +31,8 @@ test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
 
 tt_tag = 1  # 1 - test, 0 - train
 
+tau_conf_score = 0.0
+
 
 class GN():
     def __init__(self, seq_index, tt, cuda=True):
@@ -46,7 +48,7 @@ class GN():
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tt = tt
-        self.alpha = 0.8
+        self.alpha = 0.7
         self.missingCounter = 0
         self.sideConnection = 0
 
@@ -54,7 +56,7 @@ class GN():
         self.loadAModel()
         self.loadMModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_7_%.1f%s_%.2f%s/'%(type, self.alpha, decay_dir, decay, recover_dir)
+        self.out_dir = t_dir + 'motmetrics_%s_7%s%s_tau_crowdeddecay/'%(type, recover_dir, u_dir)
         print self.out_dir
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
@@ -65,8 +67,8 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index)
-        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index)
+        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -126,12 +128,12 @@ class GN():
     def loadAModel(self):
         from mot_model import uphi, ephi, vphi
         if edge_initial == 0:
-            model_dir = 'MOT'
-            name = 'all_det_ft'
+            model_dir = 'App2_bb'
+            name = '%s_7'%app_dir
             i_name = 'IoU'
         elif edge_initial == 1:
-            model_dir = 'App_new2'
-            name = 'all_7'
+            model_dir = 'App2_bb'
+            name = '%s_7'%app_dir
             i_name = 'Random'
         tail = 13
         self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%02d.pth'%(model_dir, i_name, name, tail)).to(self.device)
@@ -144,11 +146,11 @@ class GN():
     def loadMModel(self):
         from m_mot_model import uphi, ephi
         if edge_initial == 0:
-            model_dir = 'MOT_Motion'
-            name = 'all_v2_4'
+            model_dir = 'Motion1_bb'
+            name = 'all_7'
             i_name = 'IoU'
         elif edge_initial == 1:
-            model_dir = 'Motion'
+            model_dir = 'Motion1_bb'
             name = 'all_7'
             i_name = 'Random'
         tail = 13
@@ -304,6 +306,12 @@ class GN():
             u1 = self.AUphi(E, V, self.Au)
 
             ret = self.a_train_set.getRet()
+            decay_tag = [0 for i in xrange(a_m)]
+            for i in xrange(a_m):
+                for j in xrange(a_n):
+                    if ret[i][j] == 0:
+                        decay_tag[i] += 1
+
             for i in xrange(len(self.a_train_set.candidates)):
                 e1, vs, vr1, a_vs_index, a_vr_index = candidates[i]
                 m_e, m_vs_index, m_vr_index = self.m_train_set.candidates[i]
@@ -312,7 +320,7 @@ class GN():
                     print 'a_vs_index = %d, m_vs_index = %d'%(a_vs_index, m_vs_index)
                     print 'a_vr_index = %d, m_vr_index = %d'%(a_vr_index, m_vr_index)
                     raw_input('Continue?')
-                if ret[a_vs_index][a_vr_index] == 1.0:
+                if ret[a_vs_index][a_vr_index] == tau_threshold:
                     continue
 
                 e2 = self.AEphi2(e1, vs, vr1, u1)
@@ -330,8 +338,12 @@ class GN():
                 m_tmp = m_tmp.cpu().data.numpy()[0]
 
                 t = line_con[self.cur][a_vs_index][-1]
-                A = min(float(a_tmp[0]) * pow(decay, t-1), 1.0)
-                M = min(float(m_tmp[0]) * pow(decay, t-1), 1.0)
+                if decay_tag[a_vs_index] > 0:
+                    A = min(float(a_tmp[0]) * pow(decay, t-1), 1.0)
+                    M = min(float(m_tmp[0]) * pow(decay, t-1), 1.0)
+                else:
+                    A = float(a_tmp[0])
+                    M = float(m_tmp[0])
                 ret[a_vs_index][a_vr_index] = A*self.alpha + M*(1-self.alpha)
 
             # self.a_train_set.showE(outFile)
@@ -376,6 +388,10 @@ class GN():
                     line = line[:-1]
                 print >> out, line
                 self.bbx_counter += 1
+
+            if u_update:
+                self.Mu = m_u_.data
+                self.Au = u1.data
 
             for j in look_up:
                 self.m_train_set.updateVelocity(-1, j, tag=False)
@@ -442,7 +458,7 @@ class GN():
             # print head+step, results
             self.a_train_set.swapFC()
             self.m_train_set.swapFC()
-            self.swapFC() 
+            self.swapFC()
         gtIn.close()
         print '     The results:', id_step, self.bbx_counter
 
@@ -456,9 +472,12 @@ if __name__ == '__main__':
         if not os.path.exists('Results/'):
             os.mkdir('Results/')
 
-        types = ['DPM', 'SDP', 'FRCNN']
+        # types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
+        # types = [['DPM0', -0.6]]
+        # types = [['SDP', 0.5]]
+        types = [['FRCNN', 0.5]]
         for t in types:
-            type = t
+            type, tau_conf_score = t
             head = time.time()
             f_dir = 'Results/MOT%s/' % year
             if not os.path.exists(f_dir):

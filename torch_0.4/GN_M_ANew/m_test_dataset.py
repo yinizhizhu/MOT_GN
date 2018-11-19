@@ -3,7 +3,7 @@ import random, torch, shutil, os, gc
 from math import *
 from PIL import Image
 import torch.nn.functional as F
-from global_set import edge_initial, test_gt_det, tau_conf_score, tau_dis
+from global_set import edge_initial, test_gt_det, tau_dis, tau_threshold#, tau_conf_score
 
 
 def load_img(filepath):
@@ -12,7 +12,7 @@ def load_img(filepath):
 
 
 class MDatasetFromFolder(data.Dataset):
-    def __init__(self, part, part_I, cuda=True):
+    def __init__(self, part, part_I, tau, cuda=True):
         super(MDatasetFromFolder, self).__init__()
         self.dir = part
         self.cleanPath(part)
@@ -20,6 +20,7 @@ class MDatasetFromFolder(data.Dataset):
         self.gt_dir = part + '/gt/'
         self.det_dir = part + '/det/'
         self.device = torch.device("cuda" if cuda else "cpu")
+        self.tau_conf_score = tau
 
         self.getSeqL()
         if test_gt_det:
@@ -109,7 +110,7 @@ class MDatasetFromFolder(data.Dataset):
             x, y = float(line[2]), float(line[3])
             w, h = float(line[4]), float(line[5])
             conf_score = float(line[6])
-            if conf_score >= tau_conf_score:
+            if conf_score >= self.tau_conf_score:
                 img = imgs[i]
                 x, y, w, h = self.fixBB(x, y, w, h, img.size)
                 width, height = float(img.size[0]), float(img.size[1])
@@ -181,13 +182,14 @@ class MDatasetFromFolder(data.Dataset):
         return None
 
     def distance(self, a_bbx, b_bbx):
-        w = float(a_bbx[2]) * tau_dis
+        w1 = float(a_bbx[2]) * tau_dis
+        w2 = float(b_bbx[2]) * tau_dis
         dx = float(a_bbx[0] + a_bbx[2]/2) - float(b_bbx[0] + b_bbx[2]/2)
         dy = float(a_bbx[1] + a_bbx[3]/2) - float(b_bbx[1] + b_bbx[3]/2)
         d = sqrt(dx*dx+dy*dy)
-        if d <= w:
+        if d <= w1 and d <= w2:
             return 0.0
-        return 1.0
+        return tau_threshold
 
     def getRet(self):
         cur = self.f_step-self.gap

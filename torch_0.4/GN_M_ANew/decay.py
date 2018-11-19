@@ -3,8 +3,8 @@ import numpy as np
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil, torch
-from global_set import edge_initial, test_gt_det, tau_threshold, \
-    gap, f_gap, show_recovering, decay, decay_dir, recover_dir, app_dir, u_update, u_dir#, tau_conf_score
+from global_set import edge_initial, test_gt_det, tau_conf_score,\
+    tau_threshold, gap, f_gap, show_recovering, recover_dir
 from mot_model import appearance
 from test_dataset import ADatasetFromFolder
 from m_test_dataset import MDatasetFromFolder
@@ -35,12 +35,10 @@ test_seqs = [9, 11, 13]
 test_lengths = [525, 900, 750]
 
 tt_tag = 0  # 1 - test, 0 - train
-
-tau_conf_score = 0.0
-
+decay = 1.0
 
 class GN():
-    def __init__(self, seq_index, tt, a, cuda=True):
+    def __init__(self, seq_index, tt, cuda=True):
         '''
         Evaluating with the MotMetrics
         :param seq_index: the number of the sequence
@@ -53,7 +51,7 @@ class GN():
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tt = tt
-        self.alpha = a
+        self.alpha = 0.8
         self.missingCounter = 0
         self.sideConnection = 0
 
@@ -61,10 +59,7 @@ class GN():
         self.loadAModel()
         self.loadMModel()
 
-        self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_tau_tdir1.0/'%(type,
-                                                                               self.alpha,
-                                                                               decay_dir, decay,
-                                                                               recover_dir, u_dir)
+        self.out_dir = t_dir + 'motmetrics_%s_4_decay_%.1f%s/'%(type, decay, recover_dir)
         print '		', self.out_dir
         if not os.path.exists(self.out_dir):
             os.mkdir(self.out_dir)
@@ -75,8 +70,8 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
-        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
+        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index)
 
         gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
         self.copyLines(self.seq_index, 1, gt_training, self.tt)
@@ -139,12 +134,12 @@ class GN():
     def loadAModel(self):
         from mot_model import uphi, ephi, vphi
         if edge_initial == 0:
-            model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
+            model_dir = 'MOT'
+            name = 'all_det_ft'
             i_name = 'IoU'
         elif edge_initial == 1:
-            model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
+            model_dir = 'App_new2'
+            name = 'all_4'
             i_name = 'Random'
         tail = 10
         self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%02d.pth'%(model_dir, i_name, name, tail)).to(self.device)
@@ -157,11 +152,11 @@ class GN():
     def loadMModel(self):
         from m_mot_model import uphi, ephi
         if edge_initial == 0:
-            model_dir = 'Motion1_bb'
-            name = 'all_4'
+            model_dir = 'MOT_Motion'
+            name = 'all_v2_4'
             i_name = 'IoU'
         elif edge_initial == 1:
-            model_dir = 'Motion1_bb'
+            model_dir = 'Motion'
             name = 'all_4'
             i_name = 'Random'
         tail = 10
@@ -317,12 +312,6 @@ class GN():
             u1 = self.AUphi(E, V, self.Au)
 
             ret = self.a_train_set.getRet()
-            decay_tag = [0 for i in xrange(a_m)]
-            for i in xrange(a_m):
-                for j in xrange(a_n):
-                    if ret[i][j] == 0:
-                        decay_tag[i] += 1
-
             for i in xrange(len(self.a_train_set.candidates)):
                 e1, vs, vr1, a_vs_index, a_vr_index = candidates[i]
                 m_e, m_vs_index, m_vr_index = self.m_train_set.candidates[i]
@@ -331,7 +320,7 @@ class GN():
                     print 'a_vs_index = %d, m_vs_index = %d'%(a_vs_index, m_vs_index)
                     print 'a_vr_index = %d, m_vr_index = %d'%(a_vr_index, m_vr_index)
                     raw_input('Continue?')
-                if ret[a_vs_index][a_vr_index] == tau_threshold:
+                if ret[a_vs_index][a_vr_index] == 1.0:
                     continue
 
                 e2 = self.AEphi2(e1, vs, vr1, u1)
@@ -349,14 +338,8 @@ class GN():
                 m_tmp = m_tmp.cpu().data.numpy()[0]
 
                 t = line_con[self.cur][a_vs_index][-1]
-                # A = float(a_tmp[0]) * pow(decay, t-1)
-                # M = float(m_tmp[0]) * pow(decay, t-1)
-                if decay_tag[a_vs_index] > 0:
-                    A = min(float(a_tmp[0]) * pow(decay, t-1), 1.0)
-                    M = min(float(m_tmp[0]) * pow(decay, t-1), 1.0)
-                else:
-                    A = float(a_tmp[0])
-                    M = float(m_tmp[0])
+                A = min(float(a_tmp[0]) * pow(decay, t-1), 1.0)
+                M = min(float(m_tmp[0]) * pow(decay, t-1), 1.0)
                 ret[a_vs_index][a_vr_index] = A*self.alpha + M*(1-self.alpha)
 
             # self.a_train_set.showE(outFile)
@@ -401,10 +384,6 @@ class GN():
                     line = line[:-1]
                 print >> out, line
                 self.bbx_counter += 1
-
-            if u_update:
-                self.Mu = m_u_.data
-                self.Au = u1.data
 
             for j in look_up:
                 self.m_train_set.updateVelocity(-1, j, tag=False)
@@ -482,17 +461,16 @@ class GN():
 
 if __name__ == '__main__':
     try:
-        start_a = time.time()
-        for a in xrange(7, 8):
-            if not os.path.exists('Results/'):
-                os.mkdir('Results/')
+        if not os.path.exists('Results/'):
+            os.mkdir('Results/')
 
-            # types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
-            # types = [['DPM0', -0.6]]
-            # types = [['SDP', 0.5]]
-            types = [['FRCNN', 0.5]]
+        final_start = time.time()
+        for i in xrange(10):
+            decay = 1.0+i/10.0
+
+            types = ['DPMF4', 'SDP', 'FRCNN']
             for t in types:
-                type, tau_conf_score = t
+                type = t
                 head = time.time()
                 f_dir = 'Results/MOT%s/' % year
                 if not os.path.exists(f_dir):
@@ -529,7 +507,7 @@ if __name__ == '__main__':
 
                         start = time.time()
                         print '     Evaluating Graph Network...'
-                        gn = GN(test_seqs[i], test_lengths[i], a/10.0)
+                        gn = GN(test_seqs[i], test_lengths[i])
                     else:
                         seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
                         sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
@@ -537,12 +515,12 @@ if __name__ == '__main__':
 
                         start = time.time()
                         print '     Evaluating Graph Network...'
-                        gn = GN(seqs[i], lengths[i], a/10.0)
+                        gn = GN(seqs[i], lengths[i])
                         print '     Recover the number missing detections:', gn.missingCounter
                         print '     The number of sideConnections:', gn.sideConnection
                     print 'Time consuming:', (time.time()-start)/60.0
                 print 'Time consuming:', (time.time()-head)/60.0
-            print 'Total time consuming:', (time.time()-start_a)/60.0
+            print 'The final time consuming:', (time.time() - final_start) / 60.0
     except KeyboardInterrupt:
         print 'Time consuming:', (time.time()-start)/60.0
         print ''

@@ -5,7 +5,7 @@ from math import *
 from PIL import Image
 import torch.nn.functional as F
 from mot_model import appearance
-from global_set import edge_initial, test_gt_det, tau_conf_score, tau_dis, app_fine_tune, fine_tune_dir
+from global_set import edge_initial, test_gt_det, tau_dis, app_fine_tune, fine_tune_dir, tau_threshold#, tau_conf_score
 from torchvision.transforms import ToTensor
 
 
@@ -15,7 +15,7 @@ def load_img(filepath):
 
 
 class ADatasetFromFolder(data.Dataset):
-    def __init__(self, part, part_I, cuda=True, show=0):
+    def __init__(self, part, part_I, tau, cuda=True, show=0):
         super(ADatasetFromFolder, self).__init__()
         self.dir = part
         self.cleanPath(part)
@@ -23,6 +23,7 @@ class ADatasetFromFolder(data.Dataset):
         self.gt_dir = part + '/gt/'
         self.det_dir = part + '/det/'
         self.device = torch.device("cuda" if cuda else "cpu")
+        self.tau_conf_score = tau
         self.show = show
 
         self.loadAModel()
@@ -101,7 +102,7 @@ class ADatasetFromFolder(data.Dataset):
             x, y = int(float(line[2])), int(float(line[3]))
             w, h = int(float(line[4])), int(float(line[5]))
             conf_score = float(line[6])
-            if conf_score >= tau_conf_score:
+            if conf_score >= self.tau_conf_score:
                 self.bbx[index].append([x, y, w, h, conf_score])
         f.close()
 
@@ -194,13 +195,14 @@ class ADatasetFromFolder(data.Dataset):
         return None
 
     def distance(self, a_bbx, b_bbx):
-        w = float(a_bbx[2]) * tau_dis
+        w1 = float(a_bbx[2]) * tau_dis
+        w2 = float(b_bbx[2]) * tau_dis
         dx = float(a_bbx[0] + a_bbx[2]/2) - float(b_bbx[0] + b_bbx[2]/2)
         dy = float(a_bbx[1] + a_bbx[3]/2) - float(b_bbx[1] + b_bbx[3]/2)
         d = sqrt(dx*dx+dy*dy)
-        if d <= w:
+        if d <= w1 and d <= w2:
             return 0.0
-        return 1.0
+        return tau_threshold
 
     def getRet(self):
         cur = self.f_step-self.gap

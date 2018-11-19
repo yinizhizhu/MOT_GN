@@ -7,7 +7,7 @@ types = ['DPM', 'SDP', 'FRCNN']
 seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
 lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
 
-cover_sel = 'NoRecover'
+cover_sel = 'Recover'
 
 name2 = 'M_A_r_%s'%cover_sel + gap_dir
 test_seqs = [1, 3, 6, 7, 8, 12, 14]
