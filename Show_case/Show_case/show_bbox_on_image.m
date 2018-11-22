@@ -42,7 +42,9 @@ for count = 1:sz
     position = [bbox(count,1) bbox(count,2)];
     num = bbox(count,5);
     if num == ids{1} || num == ids{2}
-        im1 = insertText(im1,position,num2str(num),'FontSize',15,'BoxColor','blue','TextColor','green');
+        im1 = insertText(im1,position,num2str(num),'FontSize',18,'BoxColor','red','TextColor','white');
+    else
+        im1 = insertText(im1,position,num2str(num),'FontSize',10,'BoxColor','blue','TextColor','white');
     end
 
 %     im1 = insertText(im1,position,num2str(num),'FontSize',10,'BoxColor','blue','TextColor','white');

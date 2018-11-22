@@ -37,6 +37,9 @@ end
   
 len1 = length(bboxes);
 time1 = tic;
+
+tag = 1;
+headI = 0;
 for i = 1:len1
   if toc(time1) > 2
     fprintf('%0.1f%%\n', 100*i/len1);
@@ -44,6 +47,10 @@ for i = 1:len1
   end
   bbox = bboxes(i).bbox;
   if ~isempty(bbox)
+      if tag == 1
+          headI = i-1;
+          tag = 0;
+      end
       try
         im1 = imread(sprintf(input_frames, i)); %% read an image
       catch
@@ -62,13 +69,15 @@ for i = 1:len1
       %im1 = insertText(im1,position,printStr,'FontSize',25,'BoxColor','blue','BoxOpacity',0.5,'TextColor','white');
 
       %imshow(im1);
-      display(i);
-      display(output_frames);
+%       display(i);
+%       display(output_frames);
       imwrite(im1, [output_frames sprintf('%0.6d', i) '.jpg']); %%write the output image
   end
 end
 
-% frames_to_video(output_frames, video_fname, frame_rate);  %%convert frames to video
+display(output_frames);
+display(video_fname);
+frames_to_video(output_frames, video_fname, frame_rate);  %%convert frames to video
 
 if flag1
   unix(['rm -r ' output_frames]); %%remove temporary output folder
