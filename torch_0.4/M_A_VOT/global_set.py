@@ -46,6 +46,8 @@ gap = 25    # max frame number for side connection
 show_recovering = 0  # 1 - 11, 0 - 10
 overlap = 0.85  # the IoU
 
+vot_conf_score = 0.8
+
 # edge_init|                       random                       |
 #  u_init  |        random           |            learned
 #          |   pre-lr  |     lr      |     pre-lr    |    lr    |

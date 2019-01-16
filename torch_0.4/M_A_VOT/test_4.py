@@ -3,13 +3,13 @@ import numpy as np
 from munkres import Munkres
 import torch.nn.functional as F
 import time, os, shutil, torch
-from global_set import edge_initial, test_gt_det, tau_threshold, \
+from global_set import edge_initial, test_gt_det, tau_threshold, vot_conf_score, \
     gap, f_gap, show_recovering, decay, decay_dir, recover_dir, app_dir, u_update, u_dir#, tau_conf_score
 from mot_model import appearance
-from test_dataset import ADatasetFromFolder
-from m_test_dataset import MDatasetFromFolder
+from test_dataset_a import ADatasetFromFolder
+from test_dataset_m import MDatasetFromFolder
 import cv2
-from VOT.net import SiamRPNBIG
+from VOT.net import SiamRPNvot
 from VOT.run_SiamRPN import SiamRPN_init, SiamRPN_track
 from VOT.utils import cxy_wh_2_rect
 
@@ -176,8 +176,8 @@ class GN():
         self.Mu = self.Mu.to(self.device)
 
     def loadVOT(self):
-        self.net = SiamRPNBIG()
-        self.net.load_state_dict(torch.load('VOT/SiamRPNBIG.model'))
+        self.net = SiamRPNvot()
+        self.net.load_state_dict(torch.load('VOT/SiamRPNVOT.model'))
         self.net = self.net.to(self.device)
 
     def swapFC(self):
@@ -187,7 +187,8 @@ class GN():
 
     def linearModel(self, out, attr1, attr2):
         # print 'I got you! *.*'
-        t = attr1[-1]
+        frame1, frame2 = int(attr1[0]), int(attr2[0])
+        t = frame2 - frame1
         self.sideConnection += 1
         if t > f_gap:
             return
@@ -222,6 +223,35 @@ class GN():
             self.bbx_counter += 1
         self.missingCounter += t-1
 
+    def VOT(self, bbx):
+        x, y, w, h = bbx
+        [cx, cy, w, h] = [x+w/2, y+h/2, w, h]
+
+        # tracker init
+        target_pos, target_sz = np.array([cx, cy]), np.array([w, h])
+        state = SiamRPN_init(self.imgs[self.cur], target_pos, target_sz, self.net)
+
+        state = SiamRPN_track(state, self.imgs[self.nxt])  # track
+        res = cxy_wh_2_rect(state['target_pos'], state['target_sz'])
+        score = state['score']
+        bbx = [int(l) for l in res[:4]]
+        return bbx, score
+
+    def tracking_vot(self):
+        step = 0
+        tracked_index = [0 for i in xrange(self.a_train_set.m)]
+        self.imgs[self.nxt] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % (self.a_train_set.f_step + 1))
+        for bbx in self.a_train_set.bbx[self.a_train_set.f_step]:
+            pred, score = self.VOT(bbx)
+            if score >= vot_conf_score:
+                tracked_index[step] = 1
+
+                index = self.a_train_set.findDetction(pred)
+                self.a_train_set.delApp(index)
+                self.m_train_set.delMotion(index)
+            step += 1
+        return tracked_index
+
     def evaluation(self, head, tail, gtFile, outFile):
         '''
         Evaluation on dets
@@ -233,6 +263,7 @@ class GN():
         '''
         gtIn = open(gtFile, 'r')
         self.cur, self.nxt = 0, 1
+        self.imgs = [None, None]
         self.line_con = [[], []]
         self.id_con = [[], []]
         self.id_step = 1
@@ -244,7 +275,13 @@ class GN():
             print 'a_step =', a_step, ', m_step =', m_step
             raw_input('Continue?')
 
-        while a_step < tail:
+        self.imgs[self.cur] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % self.a_train_set.f_step)
+
+        while a_step <= tail:
+
+            # @We first do tracking with DaSiamRPN.
+            tracked_index = self.tracking_vot()
+
             # print '*********************************'
             a_t_gap = self.a_train_set.loadNext()
             m_t_gap = self.m_train_set.loadNext()
@@ -254,14 +291,18 @@ class GN():
                 raw_input('Continue?')
             a_step += a_t_gap
             m_step += m_step
+
+            if a_step > tail:
+                break
+
             # print head+step, 'F',
 
             m_u_ = self.MUphi(self.m_train_set.E, self.m_train_set.V, self.Mu)
 
             # print 'Fo'
             a_m = self.a_train_set.m
-            a_n = self.a_train_set.n
             m_m = self.m_train_set.m
+            a_n = self.a_train_set.n
             m_n = self.m_train_set.n
 
             if a_m != m_m or a_n != m_n:
@@ -332,8 +373,13 @@ class GN():
                 # A = float(a_tmp[0]) * pow(decay, t-1)
                 # M = float(m_tmp[0]) * pow(decay, t-1)
                 if decay_tag[a_vs_index] > 0:
-                    A = min(float(a_tmp[0]) * pow(decay, t-1), 1.0)
-                    M = min(float(m_tmp[0]) * pow(decay, t-1), 1.0)
+                    try:
+                        A = min(float(a_tmp[0]) * pow(decay, t + a_t_gap -2), 1.0)
+                        M = min(float(m_tmp[0]) * pow(decay, t + a_t_gap -2), 1.0)
+                    except OverflowError:
+                        print 'OverflowError!'
+                        A = float(a_tmp[0])
+                        M = float(m_tmp[0])
                 else:
                     A = float(a_tmp[0])
                     M = float(m_tmp[0])
@@ -342,7 +388,7 @@ class GN():
             # self.a_train_set.showE(outFile)
             # self.m_train_set.showE(outFile)
 
-            results, out = self.tracking(outFile, ret, a_n, m_u_, u1)
+            results, out = self.tracking(outFile, ret, a_n, m_u_, u1, a_t_gap)
 
             self.output(out, a_n)
 
@@ -391,7 +437,7 @@ class GN():
                 self.id_con[self.nxt].append(-1)
                 i += 1
 
-    def tracking(self, outFile, ret, a_n, m_u_, u1):
+    def tracking(self, outFile, ret, a_n, m_u_, u1, a_t_gap):
         # for j in ret:
         #     print j
         results = self.hungarian.compute(ret)
@@ -419,7 +465,7 @@ class GN():
             attr2 = self.line_con[self.nxt][j]
             # print attrs
             attr2[1] = str(id)
-            if attr1[-1] > 1:
+            if attr1[-1] + a_t_gap - 1 > 1:
                 # for the missing detections
                 self.linearModel(out, attr1, attr2)
             line = ''
@@ -512,10 +558,10 @@ if __name__ == '__main__':
             if not os.path.exists('Results/'):
                 os.mkdir('Results/')
 
-            # types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
+            types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
             # types = [['DPM0', -0.6]]
             # types = [['SDP', 0.5]]
-            types = [['FRCNN', 0.5]]
+            # types = [['FRCNN', 0.5]]
             for t in types:
                 type, tau_conf_score = t
                 head = time.time()

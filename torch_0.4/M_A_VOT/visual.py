@@ -1,12 +1,17 @@
 # from __future__ import print_function
+import cv2
+import os
+import shutil
+import time
+import torch
+
 import numpy as np
-from munkres import Munkres
 import torch.nn.functional as F
-import time, os, shutil, torch, cv2
-from global_set import edge_initial, test_gt_det, tau_threshold, gap, f_gap, show_recovering, app_dir, u_update, decay
-from mot_model import appearance
-from test_dataset import ADatasetFromFolder
 from m_test_dataset import MDatasetFromFolder
+
+from Reference.test_dataset import ADatasetFromFolder
+from global_set import edge_initial, test_gt_det, tau_threshold, gap, f_gap, show_recovering, app_dir, u_update, decay
+from munkres import Munkres
 
 torch.manual_seed(123)
 np.random.seed(123)
@@ -156,7 +161,6 @@ class GN():
         f.close()
 
     def loadAModel(self):
-        from mot_model import uphi, ephi
         if edge_initial == 0:
             model_dir = 'App2_bb'
             name = '%s_7'%app_dir
@@ -174,7 +178,6 @@ class GN():
         self.Au = self.Au.to(self.device)
 
     def loadMModel(self):
-        from m_mot_model import uphi, ephi
         if edge_initial == 0:
             model_dir = 'Motion1_bb'
             name = 'all_7'

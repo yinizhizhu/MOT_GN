@@ -1,12 +1,9 @@
 import torch.utils.data as data
-import cv2, random, torch, shutil, os
-import numpy as np
+import random, torch, shutil, os, gc
 from math import *
 from PIL import Image
 import torch.nn.functional as F
-from mot_model import appearance
-from global_set import edge_initial, test_gt_det, tau_dis, app_fine_tune, fine_tune_dir, tau_threshold#, tau_conf_score
-from torchvision.transforms import ToTensor
+from global_set import edge_initial, test_gt_det, tau_dis, tau_threshold#, tau_conf_score
 
 
 def load_img(filepath):
@@ -14,9 +11,9 @@ def load_img(filepath):
     return img
 
 
-class ADatasetFromFolder(data.Dataset):
-    def __init__(self, part, part_I, tau, cuda=True, show=0):
-        super(ADatasetFromFolder, self).__init__()
+class MDatasetFromFolder(data.Dataset):
+    def __init__(self, part, part_I, tau, cuda=True):
+        super(MDatasetFromFolder, self).__init__()
         self.dir = part
         self.cleanPath(part)
         self.img_dir = part_I + '/img1/'
@@ -24,14 +21,9 @@ class ADatasetFromFolder(data.Dataset):
         self.det_dir = part + '/det/'
         self.device = torch.device("cuda" if cuda else "cpu")
         self.tau_conf_score = tau
-        self.show = show
 
-        self.loadAModel()
         self.getSeqL()
-        if test_gt_det:
-            self.readBBx_gt()
-        else:
-            self.readBBx_det()
+        self.readBBx_det()
         self.initBuffer()
 
     def cleanPath(self, part):
@@ -39,14 +31,6 @@ class ADatasetFromFolder(data.Dataset):
             shutil.rmtree(part+'/gts/')
         if os.path.exists(part+'/dets/'):
             shutil.rmtree(part+'/dets/')
-
-    def loadAModel(self):
-        if app_fine_tune:
-            self.Appearance = torch.load(fine_tune_dir)
-        else:
-            self.Appearance = appearance()
-        self.Appearance.to(self.device)
-        self.Appearance.eval()  # fixing the BatchN layer
 
     def getSeqL(self):
         # get the length of the sequence
@@ -57,38 +41,21 @@ class ADatasetFromFolder(data.Dataset):
             line = line.strip().split('=')
             if line[0] == 'seqLength':
                 self.seqL = int(line[1])
+            elif line[0] == 'imWidth':
+                self.width = float(line[1])
+            elif line[0] == 'imHeight':
+                self.height = float(line[1])
         f.close()
         # print 'The length of the sequence:', self.seqL
 
-    def readBBx_gt(self):
-        # get the gt
-        self.bbx = [[] for i in xrange(self.seqL + 1)]
-        gt = self.gt_dir + 'gt.txt'
-        f = open(gt, 'r')
-        pre = -1
-        for line in f.readlines():
-            line = line.strip().split(',')
-            if line[7] == '1':
-                index = int(line[0])
-                id = int(line[1])
-                x, y = int(line[2]), int(line[3])
-                w, h = int(line[4]), int(line[5])
-                conf_score, l, vr = float(line[6]), int(line[7]), float(line[8])
-
-                # sweep the invisible head-bbx from the training data
-                if pre != id and vr == 0:
-                    continue
-
-                pre = id
-                self.bbx[index].append([x, y, w, h, id, conf_score, vr])
-        f.close()
-
-        gt_out = open(self.gt_dir + 'gt_det.txt', 'w')
-        for index in xrange(1, self.seqL+1):
-            for bbx in self.bbx[index]:
-                x,y, w, h, id, conf_score, vr = bbx
-                print >> gt_out, '%d,-1,%d,%d,%d,%d,%f,-1,-1,-1'%(index, x, y, w, h, conf_score)
-        gt_out.close()
+    def fixBB(self, x, y, w, h):
+        w = min(w+x, self.width)
+        h = min(h+y, self.height)
+        x = max(x, 0)
+        y = max(y, 0)
+        w -= x
+        h -= y
+        return x, y, w, h
 
     def readBBx_det(self):
         # get the gt
@@ -97,19 +64,16 @@ class ADatasetFromFolder(data.Dataset):
         f = open(det, 'r')
         for line in f.readlines():
             line = line.strip().split(',')
-            index = int(line[0])
-            id = int(line[1])
-            x, y = int(float(line[2])), int(float(line[3]))
-            w, h = int(float(line[4])), int(float(line[5]))
+            frame = int(line[0])
+            x, y = float(line[2]), float(line[3])
+            w, h = float(line[4]), float(line[5])
             conf_score = float(line[6])
             if conf_score >= self.tau_conf_score:
-                self.bbx[index].append([x, y, w, h, conf_score])
+                x, y, w, h = self.fixBB(x, y, w, h)
+                self.bbx[frame].append([x/self.width, y/self.height, w/self.width, h/self.height, frame])
         f.close()
 
     def initBuffer(self):
-        if self.show:
-            cv2.namedWindow('view', flags=0)
-            cv2.namedWindow('crop', flags=0)
         self.f_step = 1  # the index of next frame in the process
         self.cur = 0     # the index of current frame in the detections
         self.nxt = 1     # the index of next frame in the detections
@@ -128,16 +92,6 @@ class ADatasetFromFolder(data.Dataset):
             print '           Empty in setBuffer:', counter
         return counter
 
-    def fixBB(self, x, y, w, h, size):
-        width, height = size
-        w = min(w+x, width)
-        h = min(h+y, height)
-        x = max(x, 0)
-        y = max(y, 0)
-        w -= x
-        h -= y
-        return x, y, w, h
-
     def IOU(self, Reframe, GTframe):
         """
         Compute the Intersection of Union
@@ -145,10 +99,6 @@ class ADatasetFromFolder(data.Dataset):
         :param GTframe: x, y, w, h
         :return: Ratio
         """
-        if edge_initial == 1:
-            return random.random()
-        elif edge_initial == 3:
-            return 0.5
         x1 = Reframe[0]
         y1 = Reframe[1]
         width1 = Reframe[2]
@@ -176,17 +126,6 @@ class ADatasetFromFolder(data.Dataset):
             ratio = Area * 1. / (Area1 + Area2 - Area)
         return ratio
 
-    def getMN(self, m, n):
-        ans = [[None for i in xrange(n)] for i in xrange(m)]
-        for i in xrange(m):
-            Reframe = self.bbx[self.f_step-self.gap][i]
-            for j in xrange(n):
-                GTframe = self.bbx[self.f_step][j]
-                p = self.IOU(Reframe, GTframe)
-                # 1 - match, 0 - mismatch
-                ans[i][j] = torch.FloatTensor([1 - p, p]).to(self.device)
-        return ans
-
     def aggregate(self, set):
         if len(set):
             rho = sum(set)
@@ -213,37 +152,73 @@ class ADatasetFromFolder(data.Dataset):
                 ret[i][j] = self.distance(bbx1, self.bbx[self.f_step][j])
         return ret
 
-    def getApp(self, tag, index):
+    def getMotion(self, tag, index, pre_index=None):
         cur = self.cur if tag else self.nxt
-        if torch.is_tensor(index):
-            n = index.numel()
-            if n < 0:
-                print 'The tensor is empyt!'
-                return None
-            if n == 1:
-                return self.detections[cur][index[0]][0]
-            ans = torch.cat((self.detections[cur][index[0]][0], self.detections[cur][index[1]][0]), dim=0)
-            for i in xrange(2, n):
-                ans = torch.cat((ans, self.detections[cur][index[i]][0]), dim=0)
-            return ans
-        return self.detections[cur][index][0]
+        if tag == 0:
+            self.updateVelocity(pre_index, index)
+            return self.detections[cur][index][0][pre_index]
+        return self.detections[cur][index][0][0]
 
-    def moveApp(self, index):
-        self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx
-        self.detections[self.nxt].append(self.detections[self.cur][index])   # add the appearance
+    def moveMotion(self, index):
+        self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx: x, y, w, h, frame
+        self.detections[self.nxt].append(self.detections[self.cur][index])   # add the motion: [[x, y, w, h, v_x, v_y], frame]
+
+    def delMotion(self, index):
+        if index >= 0:
+            del self.bbx[self.f_step+1][index]
+            del self.detections[self.nxt][index]
+
+    def addMotion(self, bbx):
+        self.bbx[self.f_step+1].append(bbx)
+
+        x, y, w, h, frame = bbx
+        x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
+
+        x, y, w, h, frame = bbx
+        cur_m = []
+        for i in xrange(self.m):
+            cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
+
+        if len(self.detections[self.nxt]):
+            self.detections[self.nxt].append([cur_m, frame])
+        else:
+            self.detections[self.nxt] = [[cur_m, frame]]
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
 
-    def resnet34(self, img):
-        bbx = ToTensor()(img)
-        bbx = bbx.to(self.device)
-        bbx = bbx.view(-1, bbx.size(0), bbx.size(1), bbx.size(2))
-        ret = self.Appearance(bbx)
-        ret = ret.view(1, -1)
-        return ret
+    def updateVelocity(self, i, j, tag=True):
+        v_x = 0.0
+        v_y = 0.0
+        if i != -1:
+            x1, y1, w1, h1, id1, frame1 = self.bbx[self.f_step-self.gap][i]
+            x2, y2, w2, h2, id2, frame2 = self.bbx[self.f_step][j]
+            t = frame2 - frame1
+            v_x = (x2+w2/2 - (x1+w1/2))/t
+            v_y = (y2+h2/2 - (y1+h1/2))/t
+        if tag:
+            # print 'm=%d,n=%d; i=%d, j=%d'%(len(self.detections[self.cur]), len(self.detections[self.nxt]), i, j)
+            self.detections[self.nxt][j][0][i][0][4] = v_x
+            self.detections[self.nxt][j][0][i][0][5] = v_y
+        else:
+            cur_m = self.detections[self.nxt][j][0][0]
+            cur_m[0][4] = v_x
+            cur_m[0][5] = v_y
+            self.detections[self.nxt][j][0] = [cur_m]
+
+    def getMN(self, m, n):
+        cur = self.f_step - self.gap
+        ans = [[None for i in xrange(n)] for i in xrange(m)]
+        for i in xrange(m):
+            Reframe = self.bbx[cur][i]
+            for j in xrange(n):
+                GTframe = self.bbx[self.f_step][j]
+                p = random.random()
+                # 1 - match, 0 - mismatch
+                ans[i][j] = torch.FloatTensor([1 - p, p])
+        return ans
 
     def feature(self, tag=0):
         '''
@@ -252,49 +227,23 @@ class ADatasetFromFolder(data.Dataset):
         :param show: 1 - show the cropped & src image
         :return: None
         '''
-        apps = []
+        motions = []
         with torch.no_grad():
-            bbx_container = []
+            m = 1 if tag else self.m
             for bbx in self.bbx[self.f_step]:
                 """
                 Bellow Conditions needed be taken into consideration:
                     x, y < 0 and x+w > W, y+h > H
                 """
-                img = load_img(self.img_dir+'%06d.jpg'%self.f_step)  # initial with loading the first frame
-                if test_gt_det:
-                    x, y, w, h, id, conf_score, vr = bbx
-                else:
-                    x, y, w, h, conf_score = bbx
-                x, y, w, h = self.fixBB(x, y, w, h, img.size)
-                if test_gt_det:
-                    bbx_container.append([x, y, w, h, id, conf_score, vr])
-                else:
-                    bbx_container.append([x, y, w, h, conf_score])
-                crop = img.crop([x, y, x + w, y + h])
-                bbx = crop.resize((224, 224), Image.ANTIALIAS)
-                ret = self.resnet34(bbx)
-                app = ret.data
-                apps.append([app, conf_score])
-
-                if self.show:
-                    img = np.asarray(img)
-                    crop = np.asarray(crop)
-                    if test_gt_det:
-                        print '%06d'%self.f_step, id, vr, '***',
-                    else:
-                        print '%06d'%self.f_step, conf_score, vr, '***',
-                    print w, h, '-',
-                    print len(crop[0]), len(crop)
-                    cv2.imshow('crop', crop)
-                    cv2.imshow('view', img)
-                    cv2.waitKey(34)
-                    raw_input('Continue?')
-                    # cv2.waitKey(34)
-            self.bbx[self.f_step] = bbx_container
+                x, y, w, h, frame = bbx
+                cur_m = []
+                for i in xrange(m):
+                    cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
+                motions.append([cur_m, frame])
         if tag:
-            self.detections[self.cur] = apps
+            self.detections[self.cur] = motions
         else:
-            self.detections[self.nxt] = apps
+            self.detections[self.nxt] = motions
 
     def loadNext(self):
         self.m = len(self.detections[self.cur])
@@ -303,9 +252,14 @@ class ADatasetFromFolder(data.Dataset):
         self.n = 0
         while self.n == 0:
             self.f_step += 1
+            self.gap += 1
+
+            if self.f_step > self.seqL:
+                print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1
+                return self.gap
+
             self.feature()
             self.n = len(self.detections[self.nxt])
-            self.gap += 1
 
         if self.gap > 1:
             print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1
@@ -313,10 +267,26 @@ class ADatasetFromFolder(data.Dataset):
         self.candidates = []
         self.edges = self.getMN(self.m, self.n)
 
+        es = []
+        # vs_index = 0
         for i in xrange(self.m):
+            # vr_index = self.m
             for j in xrange(self.n):
                 e = self.edges[i][j]
+                es.append(e)
                 self.candidates.append([e, i, j])
+            #     vr_index += 1
+            # vs_index += 1
+
+        vs = []
+        for i in xrange(2):
+            n = len(self.detections[i])
+            for j in xrange(n):
+                v = self.detections[i][j][0][0]
+                vs.append(v)
+
+        self.E = self.aggregate(es).to(self.device).view(1,-1)
+        self.V = self.aggregate(vs).to(self.device)
 
         # print '     The index of the next frame', self.f_step, len(self.bbx)
         return self.gap
