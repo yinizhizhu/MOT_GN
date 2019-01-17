@@ -130,7 +130,7 @@ class MDatasetFromFolder(data.Dataset):
         if len(set):
             rho = sum(set)
             return rho/len(set)
-        print '     The set is empty!'
+        # print '     The set is empty!'
         return None
 
     def distance(self, a_bbx, b_bbx):
@@ -256,6 +256,8 @@ class MDatasetFromFolder(data.Dataset):
             self.detections[self.nxt] = motions
 
     def loadNext(self):
+        self.m = len(self.detections[self.cur])
+
         self.gap = 0
         self.n = 0
         while self.n == 0:
@@ -272,6 +274,7 @@ class MDatasetFromFolder(data.Dataset):
         if self.gap > 1:
             print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1
 
+        self.n = len(self.detections[self.nxt])
         return self.gap
 
     def loadPre(self):
@@ -299,8 +302,12 @@ class MDatasetFromFolder(data.Dataset):
                 v = self.detections[i][j][0][0]
                 vs.append(v)
 
-        self.E = self.aggregate(es).to(self.device).view(1,-1)
-        self.V = self.aggregate(vs).to(self.device)
+        E = self.aggregate(es)
+        if E is not None:
+            self.E = E.to(self.device).view(1,-1)
+        V = self.aggregate(vs)
+        if V is not None:
+            self.V = V.to(self.device)
 
         # print '     The index of the next frame', self.f_step, len(self.bbx)
 

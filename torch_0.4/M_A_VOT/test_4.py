@@ -189,7 +189,8 @@ class GN():
         # print 'I got you! *.*'
         frame1, frame2 = int(attr1[0]), int(attr2[0])
         t = frame2 - frame1
-        self.sideConnection += 1
+        if t > 1:
+            self.sideConnection += 1
         if t > f_gap:
             return
         frame = int(attr1[0])
@@ -223,8 +224,8 @@ class GN():
             self.bbx_counter += 1
         self.missingCounter += t-1
 
-    def VOT(self, bbx):
-        x, y, w, h = bbx
+    def vot(self, bbx):
+        x, y, w, h, frame = bbx
         [cx, cy, w, h] = [x+w/2, y+h/2, w, h]
 
         # tracker init
@@ -243,7 +244,7 @@ class GN():
         tracked_pred = []
         self.imgs[self.nxt] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % (self.a_train_set.f_step + gap))
         for bbx in self.a_train_set.bbx[self.a_train_set.f_step]:
-            pred, score = self.VOT(bbx)
+            pred, score = self.vot(bbx)
             if score >= vot_conf_score:
                 tracked_pred.append([step, pred])
                 if update:
@@ -266,13 +267,17 @@ class GN():
         return tracked_pred
 
     def transfer(self, line, pred):
-        line[0] = str(int(line[0])+1)
+        attr = []
+        attr.append(str(int(line[0])+1))
+        attr.append(line[1])
         step = 2
         for p in pred:
-            line[step] = str(p)
+            attr.append(str(p))
             step += 1
-        line[-1] = 1
-        return line
+        for p in line[6:]:
+            attr.append(p)
+        attr[-1] = 1
+        return attr
 
     def doTracking(self, a_t_gap, outFile):
         # @We first do tracking with DaSiamRPN.
@@ -281,10 +286,13 @@ class GN():
             if len(tracked_pred):
                 out = open(outFile, 'a')
                 for index, pred in tracked_pred:
-                    self.line_con[self.cur][index] = self.transfer(self.line_con[self.cur][index], pred)
+                    attr1 = self.line_con[self.cur][index]
+                    attr2 = self.transfer(attr1, pred)
+                    self.linearModel(out, attr1, attr2)
+                    self.line_con[self.cur][index] = attr2
 
                     line = ''
-                    for attr in self.line_con[self.cur][index][:-1]:
+                    for attr in attr1[:-1]:
                         line += attr + ','
                     if show_recovering:
                         line += '0'
@@ -301,10 +309,13 @@ class GN():
             i = len(tracked_pred) - 1
             while i >= 0:
                 index, pred = tracked_pred[i]
-                self.line_backup.append(self.transfer(self.line_con[self.cur][index], pred))
+                attr1 = self.line_con[self.cur][index]
+                attr2 = self.transfer(attr1, pred)
+                self.linearModel(out, attr1, attr2)
+                self.line_backup.append(attr2)
 
                 line = ''
-                for attr in self.line_con[self.cur][index][:-1]:
+                for attr in attr1[:-1]:
                     line += attr + ','
                 if show_recovering:
                     line += '0'
@@ -317,6 +328,20 @@ class GN():
                 del self.id_con[self.cur][index]
                 i -= 1
             out.close()
+
+    def addBackup(self, a_t_gap):
+        n = len(self.line_backup)
+        for i in xrange(n):
+            line = self.line_backup[i]
+            id = self.id_backup[i]
+
+            bbx = [int(line[2]), int(line[3]), int(line[4]), int(line[5])]
+
+            self.a_train_set.addApp(bbx, a_t_gap)
+            self.m_train_set.addMotion(bbx, a_t_gap)
+
+            self.line_con.append(line)
+            self.id_con.append(id)
 
     def evaluation(self, head, tail, gtFile, outFile):
         '''
@@ -361,24 +386,31 @@ class GN():
 
             self.loadCur(outFile, self.a_train_set.m, gtIn)
 
-            self.loadNxt(gtIn, a_n)
-
-            self.doTracking(a_t_gap, outFile)
-
             # print head+step, 'F',
-            a_m = self.a_train_set.m
-            m_m = self.m_train_set.m
-            a_n = self.a_train_set.n
-            m_n = self.m_train_set.n
-
+            a_m, m_m = self.a_train_set.m, self.m_train_set.m
+            a_n, m_n = self.a_train_set.n, self.m_train_set.n
             if a_m != m_m or a_n != m_n:
                 print 'Something is wrong!'
                 print 'a_m = %d, m_m = %d' % (a_m, m_m), ', a_n = %d, m_n = %d' % (a_n, m_n)
                 raw_input('Continue?')
-            # print 'm = %d, n = %d'%(m, n)
+
+            self.loadNxt(gtIn, a_n)
+
+            self.doTracking(a_t_gap, outFile)
+
+            self.a_train_set.loadPre()
+            self.m_train_set.loadPre()
+
+            a_m, m_m = self.a_train_set.m, self.m_train_set.m
+            a_n, m_n = self.a_train_set.n, self.m_train_set.n
+            if a_m != m_m or a_n != m_n:
+                print 'Something is wrong!'
+                print 'a_m = %d, m_m = %d' % (a_m, m_m), ', a_n = %d, m_n = %d' % (a_n, m_n)
+                raw_input('Continue?')
+
             if a_n == 0:
-                print 'There is no detection in the rest of sequence!'
-                break
+                print 'There is no detection in the next frame!'
+                continue
 
             m_u_ = self.MUphi(self.m_train_set.E, self.m_train_set.V, self.Mu)
 
@@ -462,11 +494,7 @@ class GN():
 
             self.miss_occlu(results, a_t_gap, ret, a_m)
 
-            # con = self.m_train_set.cleanEdge()
-            # for i in xrange(len(con)-1, -1, -1):
-            #     index = con[i]
-            #     del line_con[self.nxt][index]
-            #     del id_con[self.nxt][index]
+            self.addBackup(a_t_gap)
 
             self.line_con[self.cur] = []
             self.id_con[self.cur] = []

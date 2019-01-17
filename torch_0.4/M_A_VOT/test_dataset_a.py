@@ -152,13 +152,6 @@ class ADatasetFromFolder(data.Dataset):
                 ans[i][j] = torch.FloatTensor([1 - p, p]).to(self.device)
         return ans
 
-    def aggregate(self, set):
-        if len(set):
-            rho = sum(set)
-            return rho/len(set)
-        print '     The set is empty!'
-        return None
-
     def distance(self, a_bbx, b_bbx):
         w1 = float(a_bbx[2]) * tau_dis
         w2 = float(b_bbx[2]) * tau_dis
@@ -230,7 +223,7 @@ class ADatasetFromFolder(data.Dataset):
     def addApp(self, bbx, gap):
         self.bbx[self.f_step + gap].append(bbx)
 
-        img = load_img(self.img_dir + '%06d.jpg' % (self.f_step + 1))  # initial with loading the first frame
+        img = load_img(self.img_dir + '%06d.jpg' % (self.f_step + gap))  # initial with loading the first frame
         x, y, w, h = bbx
         crop = img.crop([x, y, x + w, y + h])
         bbx = crop.resize((224, 224), Image.ANTIALIAS)
@@ -298,6 +291,8 @@ class ADatasetFromFolder(data.Dataset):
             self.detections[self.nxt] = apps
 
     def loadNext(self):
+        self.m = len(self.detections[self.cur])
+
         self.gap = 0
         self.n = 0
         while self.n == 0:
@@ -313,6 +308,8 @@ class ADatasetFromFolder(data.Dataset):
 
         if self.gap > 1:
             print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1
+
+        self.n = len(self.detections[self.nxt])
         return self.gap
 
     def loadPre(self):
