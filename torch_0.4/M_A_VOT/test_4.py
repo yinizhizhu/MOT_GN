@@ -237,20 +237,86 @@ class GN():
         bbx = [int(l) for l in res[:4]]
         return bbx, score
 
-    def tracking_vot(self):
+    def tracking_vot(self, gap, update=True):
         step = 0
-        tracked_index = [0 for i in xrange(self.a_train_set.m)]
-        self.imgs[self.nxt] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % (self.a_train_set.f_step + 1))
+        indexes = []
+        tracked_pred = []
+        self.imgs[self.nxt] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % (self.a_train_set.f_step + gap))
         for bbx in self.a_train_set.bbx[self.a_train_set.f_step]:
             pred, score = self.VOT(bbx)
             if score >= vot_conf_score:
-                tracked_index[step] = 1
-
-                index = self.a_train_set.findDetction(pred)
-                self.a_train_set.delApp(index)
-                self.m_train_set.delMotion(index)
+                tracked_pred.append([step, pred])
+                if update:
+                    self.a_train_set.updateApp(pred, step, gap)
+                    self.m_train_set.updateMotion(pred, step, gap)
+                else:
+                    index = self.a_train_set.findDetction(pred)
+                    indexes.append(index)
             step += 1
-        return tracked_index
+
+        if update == False:
+            index = len(indexes) - 1
+            while index >= 0:
+                del self.line_con[self.nxt][index]
+                del self.id_con[self.nxt][index]
+                self.a_train_set.delApp(gap, index)
+                self.m_train_set.delMotion(gap, index)
+                index -= 1
+
+        return tracked_pred
+
+    def transfer(self, line, pred):
+        line[0] = str(int(line[0])+1)
+        step = 2
+        for p in pred:
+            line[step] = str(p)
+            step += 1
+        line[-1] = 1
+        return line
+
+    def doTracking(self, a_t_gap, outFile):
+        # @We first do tracking with DaSiamRPN.
+        for gap in xrange(1, a_t_gap):
+            tracked_pred = self.tracking_vot(gap, True)
+            if len(tracked_pred):
+                out = open(outFile, 'a')
+                for index, pred in tracked_pred:
+                    self.line_con[self.cur][index] = self.transfer(self.line_con[self.cur][index], pred)
+
+                    line = ''
+                    for attr in self.line_con[self.cur][index][:-1]:
+                        line += attr + ','
+                    if show_recovering:
+                        line += '0'
+                    else:
+                        line = line[:-1]
+                    print >> out, line
+
+                    self.id_con[self.cur][index] = self.id_con[self.cur][index]
+                out.close()
+
+        tracked_pred = self.tracking_vot(a_t_gap, False)
+        if len(tracked_pred):
+            out = open(outFile, 'a')
+            i = len(tracked_pred) - 1
+            while i >= 0:
+                index, pred = tracked_pred[i]
+                self.line_backup.append(self.transfer(self.line_con[self.cur][index], pred))
+
+                line = ''
+                for attr in self.line_con[self.cur][index][:-1]:
+                    line += attr + ','
+                if show_recovering:
+                    line += '0'
+                else:
+                    line = line[:-1]
+                print >> out, line
+
+                self.id_backup.append(self.id_con[self.cur][index])
+                del self.line_con[self.cur][index]
+                del self.id_con[self.cur][index]
+                i -= 1
+            out.close()
 
     def evaluation(self, head, tail, gtFile, outFile):
         '''
@@ -266,6 +332,8 @@ class GN():
         self.imgs = [None, None]
         self.line_con = [[], []]
         self.id_con = [[], []]
+        self.line_backup = []
+        self.id_backup = []
         self.id_step = 1
 
         a_step = head + self.a_train_set.setBuffer(head)
@@ -278,10 +346,6 @@ class GN():
         self.imgs[self.cur] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % self.a_train_set.f_step)
 
         while a_step <= tail:
-
-            # @We first do tracking with DaSiamRPN.
-            tracked_index = self.tracking_vot()
-
             # print '*********************************'
             a_t_gap = self.a_train_set.loadNext()
             m_t_gap = self.m_train_set.loadNext()
@@ -295,11 +359,13 @@ class GN():
             if a_step > tail:
                 break
 
+            self.loadCur(outFile, self.a_train_set.m, gtIn)
+
+            self.loadNxt(gtIn, a_n)
+
+            self.doTracking(a_t_gap, outFile)
+
             # print head+step, 'F',
-
-            m_u_ = self.MUphi(self.m_train_set.E, self.m_train_set.V, self.Mu)
-
-            # print 'Fo'
             a_m = self.a_train_set.m
             m_m = self.m_train_set.m
             a_n = self.a_train_set.n
@@ -307,14 +373,14 @@ class GN():
 
             if a_m != m_m or a_n != m_n:
                 print 'Something is wrong!'
-                print 'a_m = %d, m_m = %d'%(a_m, m_m), ', a_n = %d, m_n = %d'%(a_n, m_n)
+                print 'a_m = %d, m_m = %d' % (a_m, m_m), ', a_n = %d, m_n = %d' % (a_n, m_n)
                 raw_input('Continue?')
             # print 'm = %d, n = %d'%(m, n)
-            if a_n==0:
+            if a_n == 0:
                 print 'There is no detection in the rest of sequence!'
                 break
 
-            self.loadDetections(outFile, a_m, gtIn, a_n)
+            m_u_ = self.MUphi(self.m_train_set.E, self.m_train_set.V, self.Mu)
 
             # update the edges
             # print 'T',
@@ -363,7 +429,7 @@ class GN():
 
                 m_e = m_e.to(self.device).view(1,-1)
                 m_v1 = self.m_train_set.getMotion(1, m_vs_index)
-                m_v2 = self.m_train_set.getMotion(0, m_vr_index, m_vs_index, self.line_con[self.cur][m_vs_index][-1])
+                m_v2 = self.m_train_set.getMotion(0, m_vr_index, m_vs_index)
                 m_e_ = self.MEphi(m_e, m_v1, m_v2, m_u_)
                 self.m_train_set.edges[m_vs_index][m_vr_index] = m_e_.data.view(-1)
                 m_tmp = F.softmax(m_e_)
@@ -396,6 +462,19 @@ class GN():
 
             self.miss_occlu(results, a_t_gap, ret, a_m)
 
+            # con = self.m_train_set.cleanEdge()
+            # for i in xrange(len(con)-1, -1, -1):
+            #     index = con[i]
+            #     del line_con[self.nxt][index]
+            #     del id_con[self.nxt][index]
+
+            self.line_con[self.cur] = []
+            self.id_con[self.cur] = []
+            # print head+step, results
+            self.a_train_set.swapFC()
+            self.m_train_set.swapFC()
+            self.swapFC()
+
         gtIn.close()
         print '     The results:', self.id_step, self.bbx_counter
 
@@ -404,7 +483,7 @@ class GN():
         # print >> out, tra_tst
         # out.close()
 
-    def loadDetections(self, outFile, a_m, gtIn, a_n):
+    def loadCur(self, outFile, a_m, gtIn):
         if self.id_step == 1:
             out = open(outFile, 'a')
             i = 0
@@ -428,6 +507,7 @@ class GN():
                     i += 1
             out.close()
 
+    def loadNxt(self, gtIn, a_n):
         i = 0
         while i < a_n:
             attrs = gtIn.readline().strip().split(',')
@@ -457,7 +537,7 @@ class GN():
             self.a_train_set.detections[nxt][j][0] = vr1.data
 
             look_up.remove(j)
-            self.m_train_set.updateVelocity(i, j, self.line_con[self.cur][i][-1], False)
+            self.m_train_set.updateVelocity(i, j, False)
 
             id = self.id_con[self.cur][i]
             self.id_con[self.nxt][j] = id
@@ -537,19 +617,6 @@ class GN():
                 self.a_train_set.moveApp(index)
                 self.m_train_set.moveMotion(index)
             index += 1
-
-        # con = self.m_train_set.cleanEdge()
-        # for i in xrange(len(con)-1, -1, -1):
-        #     index = con[i]
-        #     del line_con[self.nxt][index]
-        #     del id_con[self.nxt][index]
-
-        self.line_con[self.cur] = []
-        self.id_con[self.cur] = []
-        # print head+step, results
-        self.a_train_set.swapFC()
-        self.m_train_set.swapFC()
-        self.swapFC()
 
 if __name__ == '__main__':
     try:

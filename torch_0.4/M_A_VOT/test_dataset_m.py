@@ -163,26 +163,36 @@ class MDatasetFromFolder(data.Dataset):
         self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx: x, y, w, h, frame
         self.detections[self.nxt].append(self.detections[self.cur][index])   # add the motion: [[x, y, w, h, v_x, v_y], frame]
 
-    def delMotion(self, index):
+    def delMotion(self, gap, index):
         if index >= 0:
-            del self.bbx[self.f_step+1][index]
+            del self.bbx[self.f_step + gap][index]
             del self.detections[self.nxt][index]
 
-    def addMotion(self, bbx):
-        self.bbx[self.f_step+1].append(bbx)
-
-        x, y, w, h, frame = bbx
+    def updateMotion(self, pred, index, gap):
+        x, y, w, h = pred
         x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
 
-        x, y, w, h, frame = bbx
+        cur_m = []
+        for i in xrange(self.m):
+            cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
+
+        self.bbx[self.cur][index] = [x, y, w, h, self.f_step + gap]
+        self.detections[self.cur][index] = [cur_m, self.f_step + gap]
+
+    def addMotion(self, bbx, gap):
+        self.bbx[self.f_step + gap].append(bbx)
+
+        x, y, w, h = bbx
+        x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
+
         cur_m = []
         for i in xrange(self.m):
             cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
 
         if len(self.detections[self.nxt]):
-            self.detections[self.nxt].append([cur_m, frame])
+            self.detections[self.nxt].append([cur_m, self.f_step + gap])
         else:
-            self.detections[self.nxt] = [[cur_m, frame]]
+            self.detections[self.nxt] = [[cur_m, self.f_step + gap]]
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
@@ -246,8 +256,6 @@ class MDatasetFromFolder(data.Dataset):
             self.detections[self.nxt] = motions
 
     def loadNext(self):
-        self.m = len(self.detections[self.cur])
-
         self.gap = 0
         self.n = 0
         while self.n == 0:
@@ -263,6 +271,12 @@ class MDatasetFromFolder(data.Dataset):
 
         if self.gap > 1:
             print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1
+
+        return self.gap
+
+    def loadPre(self):
+        self.m = len(self.detections[self.cur])
+        self.n = len(self.detections[self.nxt])
 
         self.candidates = []
         self.edges = self.getMN(self.m, self.n)
@@ -289,7 +303,6 @@ class MDatasetFromFolder(data.Dataset):
         self.V = self.aggregate(vs).to(self.device)
 
         # print '     The index of the next frame', self.f_step, len(self.bbx)
-        return self.gap
 
     def showE(self, outName):
         with torch.no_grad():

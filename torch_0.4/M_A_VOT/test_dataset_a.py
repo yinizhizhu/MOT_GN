@@ -197,10 +197,22 @@ class ADatasetFromFolder(data.Dataset):
         self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx
         self.detections[self.nxt].append(self.detections[self.cur][index])   # add the appearance
 
-    def delApp(self, index):
+    def delApp(self, gap, index):
         if index >= 0:
-            del self.bbx[self.f_step+1][index]
+            del self.bbx[self.f_step+gap][index]
             del self.detections[self.nxt][index]
+
+    def updateApp(self, pred, index, gap):
+        img = load_img(self.img_dir + '%06d.jpg' % (self.f_step + gap))  # initial with loading the first frame
+
+        x, y, w, h = pred
+        crop = img.crop([x, y, x + w, y + h])
+        bbx = crop.resize((224, 224), Image.ANTIALIAS)
+        ret = self.resnet34(bbx)
+        app = ret.data
+
+        self.bbx[self.cur][index] = [x, y, w, h, self.f_step + gap]
+        self.detections[self.cur][index] = [app, self.f_step + gap]
 
     def findDetction(self, bbx):
         step = 0
@@ -215,20 +227,20 @@ class ADatasetFromFolder(data.Dataset):
             return -1
         return index
 
-    def addApp(self, bbx):
-        self.bbx[self.f_step+1].append(bbx)
+    def addApp(self, bbx, gap):
+        self.bbx[self.f_step + gap].append(bbx)
 
         img = load_img(self.img_dir + '%06d.jpg' % (self.f_step + 1))  # initial with loading the first frame
-        x, y, w, h, frame = bbx
+        x, y, w, h = bbx
         crop = img.crop([x, y, x + w, y + h])
         bbx = crop.resize((224, 224), Image.ANTIALIAS)
         ret = self.resnet34(bbx)
         app = ret.data
 
         if len(self.detections[self.nxt]):
-            self.detections[self.nxt].append([app, frame])
+            self.detections[self.nxt].append([app, self.f_step + gap])
         else:
-            self.detections[self.nxt] = [[app, frame]]
+            self.detections[self.nxt] = [[app, self.f_step + gap]]
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
@@ -286,8 +298,6 @@ class ADatasetFromFolder(data.Dataset):
             self.detections[self.nxt] = apps
 
     def loadNext(self):
-        self.m = len(self.detections[self.cur])
-
         self.gap = 0
         self.n = 0
         while self.n == 0:
@@ -303,6 +313,11 @@ class ADatasetFromFolder(data.Dataset):
 
         if self.gap > 1:
             print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1
+        return self.gap
+
+    def loadPre(self):
+        self.m = len(self.detections[self.cur])
+        self.n = len(self.detections[self.nxt])
 
         self.candidates = []
         self.edges = self.getMN(self.m, self.n)
@@ -313,7 +328,6 @@ class ADatasetFromFolder(data.Dataset):
                 self.candidates.append([e, i, j])
 
         # print '     The index of the next frame', self.f_step, len(self.bbx)
-        return self.gap
 
     def showE(self, outName):
         with torch.no_grad():
@@ -361,3 +375,12 @@ class ADatasetFromFolder(data.Dataset):
 
     def __len__(self):
         return len(self.candidates)
+
+# a = [i for i in xrange(10)]
+# print a
+# del a[1]
+# print a
+#
+# a = 123.03
+# b = 12303
+# print str(a), str(b)
