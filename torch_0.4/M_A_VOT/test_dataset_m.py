@@ -163,36 +163,38 @@ class MDatasetFromFolder(data.Dataset):
         self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx: x, y, w, h, frame
         self.detections[self.nxt].append(self.detections[self.cur][index])   # add the motion: [[x, y, w, h, v_x, v_y], frame]
 
-    def delMotion(self, gap, index):
-        if index >= 0:
-            del self.bbx[self.f_step + gap][index]
-            del self.detections[self.nxt][index]
+    def delMotionCur(self, index):
+        del self.bbx[self.f_step - self.gap][index]
+        del self.detections[self.cur][index]
+
+    def delMotionNxt(self, index):
+        del self.bbx[self.f_step][index]
+        del self.detections[self.nxt][index]
 
     def updateMotion(self, pred, index, gap):
+        frame = self.f_step - self.gap + gap
         x, y, w, h = pred
-        x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
+        self.bbx[self.f_step][index] = [float(x), float(y), float(w), float(h), frame]
 
+        x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
         cur_m = []
         for i in xrange(self.m):
             cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
+        self.detections[self.cur][index] = [cur_m, frame]
 
-        self.bbx[self.cur][index] = [x, y, w, h, self.f_step + gap]
-        self.detections[self.cur][index] = [cur_m, self.f_step + gap]
-
-    def addMotion(self, bbx, gap):
-        self.bbx[self.f_step + gap].append(bbx)
+    def addMotion(self, bbx):
+        frame = self.f_step
+        ans = [p for p in bbx]
+        ans.append(frame)
+        self.bbx[frame].append(ans)
 
         x, y, w, h = bbx
         x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
 
         cur_m = []
-        for i in xrange(self.m):
-            cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
-
-        if len(self.detections[self.nxt]):
-            self.detections[self.nxt].append([cur_m, self.f_step + gap])
-        else:
-            self.detections[self.nxt] = [[cur_m, self.f_step + gap]]
+        cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
+        # print 'In addMotion:', cur_m
+        self.detections[self.nxt].append([cur_m, frame])
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
@@ -203,8 +205,8 @@ class MDatasetFromFolder(data.Dataset):
         v_x = 0.0
         v_y = 0.0
         if i != -1:
-            x1, y1, w1, h1, id1, frame1 = self.bbx[self.f_step-self.gap][i]
-            x2, y2, w2, h2, id2, frame2 = self.bbx[self.f_step][j]
+            x1, y1, w1, h1, frame1 = self.bbx[self.f_step-self.gap][i]
+            x2, y2, w2, h2, frame2 = self.bbx[self.f_step][j]
             t = frame2 - frame1
             v_x = (x2+w2/2 - (x1+w1/2))/t
             v_y = (y2+h2/2 - (y1+h1/2))/t
@@ -219,12 +221,9 @@ class MDatasetFromFolder(data.Dataset):
             self.detections[self.nxt][j][0] = [cur_m]
 
     def getMN(self, m, n):
-        cur = self.f_step - self.gap
         ans = [[None for i in xrange(n)] for i in xrange(m)]
         for i in xrange(m):
-            Reframe = self.bbx[cur][i]
             for j in xrange(n):
-                GTframe = self.bbx[self.f_step][j]
                 p = random.random()
                 # 1 - match, 0 - mismatch
                 ans[i][j] = torch.FloatTensor([1 - p, p])
@@ -277,10 +276,11 @@ class MDatasetFromFolder(data.Dataset):
         self.n = len(self.detections[self.nxt])
         return self.gap
 
-    def loadPre(self):
+    def counter(self):
         self.m = len(self.detections[self.cur])
         self.n = len(self.detections[self.nxt])
 
+    def loadPre(self):
         self.candidates = []
         self.edges = self.getMN(self.m, self.n)
 
@@ -295,6 +295,7 @@ class MDatasetFromFolder(data.Dataset):
             #     vr_index += 1
             # vs_index += 1
 
+        # print 'LoadPre: %d * %d' % (self.n, self.m)
         vs = []
         for i in xrange(2):
             n = len(self.detections[i])

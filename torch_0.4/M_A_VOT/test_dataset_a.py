@@ -144,13 +144,18 @@ class ADatasetFromFolder(data.Dataset):
     def getMN(self, m, n):
         ans = [[None for i in xrange(n)] for i in xrange(m)]
         for i in xrange(m):
-            Reframe = self.bbx[self.f_step-self.gap][i]
             for j in xrange(n):
-                GTframe = self.bbx[self.f_step][j]
                 p = random.random()
                 # 1 - match, 0 - mismatch
                 ans[i][j] = torch.FloatTensor([1 - p, p]).to(self.device)
         return ans
+
+    def aggregate(self, set):
+        if len(set):
+            rho = sum(set)
+            return rho/len(set)
+        print '     The set is empty!'
+        return None
 
     def distance(self, a_bbx, b_bbx):
         w1 = float(a_bbx[2]) * tau_dis
@@ -190,13 +195,19 @@ class ADatasetFromFolder(data.Dataset):
         self.bbx[self.f_step].append(self.bbx[self.f_step-self.gap][index])  # add the bbx
         self.detections[self.nxt].append(self.detections[self.cur][index])   # add the appearance
 
-    def delApp(self, gap, index):
-        if index >= 0:
-            del self.bbx[self.f_step+gap][index]
-            del self.detections[self.nxt][index]
+    def delAppCur(self, index):
+        # print 'In delAppCur:', len(self.bbx[self.f_step-self.gap]), index
+        # print self.bbx[self.f_step - self.gap]
+        del self.bbx[self.f_step - self.gap][index]
+        del self.detections[self.cur][index]
+
+    def delAppNxt(self, index):
+        del self.bbx[self.f_step][index]
+        del self.detections[self.nxt][index]
 
     def updateApp(self, pred, index, gap):
-        img = load_img(self.img_dir + '%06d.jpg' % (self.f_step + gap))  # initial with loading the first frame
+        frame = self.f_step - self.gap + gap
+        img = load_img(self.img_dir + '%06d.jpg' % frame)  # initial with loading the first frame
 
         x, y, w, h = pred
         crop = img.crop([x, y, x + w, y + h])
@@ -204,13 +215,13 @@ class ADatasetFromFolder(data.Dataset):
         ret = self.resnet34(bbx)
         app = ret.data
 
-        self.bbx[self.cur][index] = [x, y, w, h, self.f_step + gap]
-        self.detections[self.cur][index] = [app, self.f_step + gap]
+        self.bbx[self.f_step][index] = [x, y, w, h, frame]
+        self.detections[self.cur][index] = [app, frame]
 
     def findDetction(self, bbx):
         step = 0
         index, iou = -1, -1.0
-        for BBx in self.bbx[self.f_step+1]:
+        for BBx in self.bbx[self.f_step]:
             tmp = self.IOU(bbx, BBx)
             if tmp > iou:
                 index = step
@@ -220,20 +231,20 @@ class ADatasetFromFolder(data.Dataset):
             return -1
         return index
 
-    def addApp(self, bbx, gap):
-        self.bbx[self.f_step + gap].append(bbx)
+    def addApp(self, bbx):
+        frame = self.f_step
+        ans = [p for p in bbx]
+        ans.append(frame)
+        self.bbx[frame].append(ans)
 
-        img = load_img(self.img_dir + '%06d.jpg' % (self.f_step + gap))  # initial with loading the first frame
+        img = load_img(self.img_dir + '%06d.jpg' % (frame))  # initial with loading the first frame
         x, y, w, h = bbx
         crop = img.crop([x, y, x + w, y + h])
         bbx = crop.resize((224, 224), Image.ANTIALIAS)
         ret = self.resnet34(bbx)
         app = ret.data
 
-        if len(self.detections[self.nxt]):
-            self.detections[self.nxt].append([app, self.f_step + gap])
-        else:
-            self.detections[self.nxt] = [[app, self.f_step + gap]]
+        self.detections[self.nxt].append([app, frame])
 
     def swapFC(self):
         self.cur = self.cur ^ self.nxt
@@ -312,10 +323,11 @@ class ADatasetFromFolder(data.Dataset):
         self.n = len(self.detections[self.nxt])
         return self.gap
 
-    def loadPre(self):
+    def counter(self):
         self.m = len(self.detections[self.cur])
         self.n = len(self.detections[self.nxt])
 
+    def loadPre(self):
         self.candidates = []
         self.edges = self.getMN(self.m, self.n)
 
@@ -373,11 +385,3 @@ class ADatasetFromFolder(data.Dataset):
     def __len__(self):
         return len(self.candidates)
 
-# a = [i for i in xrange(10)]
-# print a
-# del a[1]
-# print a
-#
-# a = 123.03
-# b = 12303
-# print str(a), str(b)
