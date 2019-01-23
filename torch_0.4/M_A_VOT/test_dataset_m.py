@@ -172,14 +172,18 @@ class MDatasetFromFolder(data.Dataset):
         del self.detections[self.nxt][index]
 
     def updateMotion(self, pred, index, gap):
+        # print 'In updateMotion:'
         frame = self.f_step - self.gap + gap
-        x, y, w, h = pred
-        self.bbx[self.f_step][index] = [float(x), float(y), float(w), float(h), frame]
 
+        x, y, w, h = pred
+        # print '     ', index, len(self.bbx[self.f_step])
+        # print '     ', self.bbx[self.f_step]
         x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
         cur_m = []
         for i in xrange(self.m):
             cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
+
+        self.bbx[self.f_step - self.gap][index] = [float(x), float(y), float(w), float(h), frame]
         self.detections[self.cur][index] = [cur_m, frame]
 
     def addMotion(self, bbx):

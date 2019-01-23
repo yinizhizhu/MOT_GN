@@ -185,7 +185,9 @@ class GN():
         self.nxt = self.cur ^ self.nxt
         self.cur = self.cur ^ self.nxt
 
-    def outputLine(self, out, attr):
+    def outputLine(self, out, attr, src):
+        if attr[1] == '-1':
+            print src, '-', attr
         line = ''
         for attr in attr[:-1]:
             line += attr + ','
@@ -195,7 +197,7 @@ class GN():
             line = line[:-1]
         print >> out, line
 
-    def linearModel(self, out, attr1, attr2):
+    def linearModel(self, out, attr1, attr2, src):
         # print 'I got you! *.*'
         # print attr1, attr2
         frame, frame2 = int(attr1[0]), int(attr2[0])
@@ -203,7 +205,7 @@ class GN():
         if t > 2:
             self.sideConnection += 1
         if t > f_gap:
-            self.outputLine(out, attr2)
+            self.outputLine(out, attr2, src+'LinearModel1')
             return
         x1, y1, w1, h1 = float(attr1[2]), float(attr1[3]), float(attr1[4]), float(attr1[5])
         x2, y2, w2, h2 = float(attr2[2]), float(attr2[3]), float(attr2[4]), float(attr2[5])
@@ -224,9 +226,24 @@ class GN():
             attr1[3] = str(y1)
             attr1[4] = str(w1)
             attr1[5] = str(h1)
-            self.outputLine(out, attr1)
+            self.outputLine(out, attr1, 'LinearModel2')
             self.bbx_counter += 1
         self.missingCounter += t-1
+
+    def checker(self, bbxes, len):
+        ans = [1 for i in xrange(len)]
+        for i in xrange(len-1):
+            for j in xrange(i+1, len):
+                if ans[j]:
+                    ratio = self.a_train_set.IOU(bbxes[i], bbxes[j])
+                    if ratio[1] >= 0.5 and ratio[2] >= 0.5:
+                        ans[i] = 0
+                        ans[j] = 0
+                    if ratio[1] >= 0.8:
+                        ans[i] = 0
+                    if ratio[2] >= 0.8:
+                        ans[j] = 0
+        return ans
 
     def vot(self, bbx):
         x, y, w, h, frame = bbx
@@ -234,37 +251,44 @@ class GN():
 
         # tracker init
         target_pos, target_sz = np.array([cx, cy]), np.array([w, h])
-        state = SiamRPN_init(self.imgs[self.cur], target_pos, target_sz, self.net)
+        cur_img = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % frame)
+        state = SiamRPN_init(cur_img, target_pos, target_sz, self.net)
 
-        state = SiamRPN_track(state, self.imgs[self.nxt])  # track
+        state = SiamRPN_track(state, self.img)  # track
         res = cxy_wh_2_rect(state['target_pos'], state['target_sz'])
         score = state['score']
         bbx = [int(l) for l in res[:4]]
         return bbx, score
 
     def tracking_vot(self, gap, update=True):
-        container = set()
+        if update == False:
+            if self.a_train_set.n != len(self.a_train_set.bbx[self.a_train_set.f_step]):
+                print 'The length is wrong!'
+            self.a_train_set.tags_index = [1 for i in xrange(self.a_train_set.n)]
+
+        indexes = []
         tracked_pred = []
         frame = self.a_train_set.f_step - self.a_train_set.gap
         step = len(self.a_train_set.bbx[frame]) - 1
-        self.imgs[self.nxt] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % (frame+gap))
+        ans = self.checker(self.a_train_set.bbx[frame], step+1)
+        self.img = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % (frame+gap))
         while step >= 0:
-            bbx = self.a_train_set.bbx[frame][step]
-            pred, score = self.vot(bbx)
-            if score >= vot_conf_score:
-                tracked_pred.append([step, pred])
-                if update:
-                    self.a_train_set.updateApp(pred, step, gap)
-                    self.m_train_set.updateMotion(pred, step, gap)
-                else:
-                    self.a_train_set.delAppCur(step)
-                    self.m_train_set.delMotionCur(step)
-                    index = self.a_train_set.findDetction(pred)
-                    if index >= 0:
-                        container.add(index)
+            if ans[step]:
+                bbx = self.a_train_set.bbx[frame][step]
+                pred, score = self.vot(bbx)
+                if score >= vot_conf_score:
+                    tracked_pred.append([step, pred])
+                    if update:
+                        self.a_train_set.updateApp(pred, step, gap)
+                        self.m_train_set.updateMotion(pred, step, gap)
+                    else:
+                        self.a_train_set.delAppCur(step)
+                        self.m_train_set.delMotionCur(step)
+                        index = self.a_train_set.findDetection(pred)
+                        if index >= 0:
+                            indexes.append(index)
             step -= 1
 
-        indexes = [p for p in container]
         indexes = sorted(indexes, reverse=True)
 
         # print 'Tracking_vot', '*'*30
@@ -273,6 +297,9 @@ class GN():
         # print len(self.id_con[self.nxt]), self.id_con[self.nxt]
 
         if update == False:
+            # print 'tags_index:', self.a_train_set.tags_index
+            # print len(indexes), len(self.line_con[self.nxt]),
+            # print indexes
             for index in indexes:
                 del self.line_con[self.nxt][index]
                 del self.id_con[self.nxt][index]
@@ -303,7 +330,7 @@ class GN():
                 for index, pred in tracked_pred:
                     attr1 = self.line_con[self.cur][index]
                     attr2 = self.transfer(attr1, pred)
-                    self.linearModel(out, attr1, attr2)
+                    self.linearModel(out, attr1, attr2, 'doTracking1')
                     self.line_con[self.cur][index] = attr2
                     self.id_con[self.cur][index] = self.id_con[self.cur][index]
                 out.close()
@@ -323,14 +350,17 @@ class GN():
 
                 attr1 = self.line_con[self.cur][index]
                 attr2 = self.transfer(attr1, pred)
-                self.linearModel(out, attr1, attr2)
+                self.linearModel(out, attr1, attr2, 'doTracking2')
                 self.line_backup.append(attr2)
                 self.id_backup.append(self.id_con[self.cur][index])
                 del self.line_con[self.cur][index]
                 del self.id_con[self.cur][index]
             out.close()
 
-    def addBackup(self, a_t_gap):
+    def addBackup(self):
+        # print '*'*30
+        # print 'Cur:', self.id_con[self.cur]
+        # print 'Nxt:', self.id_con[self.nxt]
         n = len(self.line_backup)
         for i in xrange(n):
             line = self.line_backup[i]
@@ -343,6 +373,10 @@ class GN():
 
             self.line_con[self.nxt].append(line)
             self.id_con[self.nxt].append(id)
+
+        # print 'Cur2:', self.id_con[self.cur]
+        # print 'Nxt2:', self.id_con[self.nxt]
+
         self.line_backup = []
         self.id_backup = []
 
@@ -357,7 +391,7 @@ class GN():
         '''
         gtIn = open(gtFile, 'r')
         self.cur, self.nxt = 0, 1
-        self.imgs = [None, None]
+        self.img = None
         self.line_con = [[], []]
         self.id_con = [[], []]
         self.line_backup = []
@@ -373,7 +407,6 @@ class GN():
 
         while a_step <= tail:
             # print '*********************************'
-            self.imgs[self.cur] = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % self.a_train_set.f_step)
 
             a_t_gap = self.a_train_set.loadNext()
             m_t_gap = self.m_train_set.loadNext()
@@ -422,8 +455,7 @@ class GN():
                 # print a_m, len(self.line_con[self.cur])
                 # print self.line_con[self.cur]
 
-                index = 0
-                while index < a_m:
+                for index in xrange(a_m):
                     attrs = self.line_con[self.cur][index]
                     # print '*', attrs, '*'
                     if attrs[-1] + a_t_gap <= gap:
@@ -432,9 +464,14 @@ class GN():
                         self.id_con[self.nxt].append(self.id_con[self.cur][index])
                         self.a_train_set.moveApp(index)
                         self.m_train_set.moveMotion(index)
-                    index += 1
 
-                self.addBackup(a_t_gap)
+                for index in xrange(a_n):
+                    attrs = self.line_con[self.nxt][index]
+                    attrs[1] = str(self.id_step)
+                    self.id_con[self.nxt][index] = self.id_step
+                    self.id_step += 1
+
+                self.addBackup()
                 self.line_con[self.cur] = []
                 self.id_con[self.cur] = []
                 # print head+step, results
@@ -520,7 +557,7 @@ class GN():
             # self.a_train_set.showE(outFile)
             # self.m_train_set.showE(outFile)
 
-            results, out = self.tracking(outFile, ret, a_n, m_u_, u1, a_t_gap)
+            results, out = self.tracking(outFile, ret, a_n, m_u_, u1)
 
             self.output(out, a_n)
 
@@ -528,7 +565,7 @@ class GN():
 
             self.miss_occlu(results, a_t_gap, ret, a_m)
 
-            self.addBackup(a_t_gap)
+            self.addBackup()
 
             self.line_con[self.cur] = []
             self.id_con[self.cur] = []
@@ -554,7 +591,7 @@ class GN():
                 if float(attrs[6]) >= tau_conf_score:
                     attrs.append(1)
                     attrs[1] = str(self.id_step)
-                    self.outputLine(out, attrs)
+                    self.outputLine(out, attrs, 'LoadCur')
                     self.bbx_counter += 1
                     self.line_con[self.cur].append(attrs)
                     self.id_con[self.cur].append(self.id_step)
@@ -572,7 +609,7 @@ class GN():
                 self.id_con[self.nxt].append(-1)
                 i += 1
 
-    def tracking(self, outFile, ret, a_n, m_u_, u1, a_t_gap):
+    def tracking(self, outFile, ret, a_n, m_u_, u1):
         # for j in ret:
         #     print j
         results = self.hungarian.compute(ret)
@@ -600,7 +637,9 @@ class GN():
             attr2 = self.line_con[self.nxt][j]
             # print attrs
             attr2[1] = str(id)
-            self.linearModel(out, attr1, attr2)
+            if attr2[1] =='-1':
+                print 'In main process:', attr2[1], self.id_con[self.cur][i]
+            self.linearModel(out, attr1, attr2, 'Main')
             self.bbx_counter += 1
 
         if u_update:
@@ -617,7 +656,7 @@ class GN():
                 self.id_con[self.nxt][i] = self.id_step
                 attrs = self.line_con[self.nxt][i]
                 attrs[1] = str(self.id_step)
-                self.outputLine(out, attrs)
+                self.outputLine(out, attrs, 'Output')
                 self.bbx_counter += 1
                 self.id_step += 1
 
@@ -656,17 +695,18 @@ class GN():
                 self.m_train_set.moveMotion(index)
             index += 1
 
+start_a = time.time()
 if __name__ == '__main__':
     try:
-        start_a = time.time()
         for a in xrange(7, 8):
             if not os.path.exists('Results/'):
                 os.mkdir('Results/')
 
-            types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
-            # types = [['DPM0', -0.6]]
+            # types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
+            types = [['DPM0', -0.6]]
             # types = [['SDP', 0.5]]
             # types = [['FRCNN', 0.5]]
+            # types = [['FRCNN', 0.5], ['SDP', 0.5]]
             for t in types:
                 type, tau_conf_score = t
                 head = time.time()
@@ -720,7 +760,7 @@ if __name__ == '__main__':
                 print 'Time consuming:', (time.time()-head)/60.0
             print 'Total time consuming:', (time.time()-start_a)/60.0
     except KeyboardInterrupt:
-        print 'Time consuming:', (time.time()-start)/60.0
         print ''
         print '-'*90
         print 'Existing from training early.'
+        print 'Time consuming:', (time.time()-start_a)/60.0

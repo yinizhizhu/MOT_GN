@@ -40,7 +40,7 @@ class GN():
         out = open(self.outName, 'w')
         out.close()
 
-        self.tau_conf_score = 0.5
+        self.tau_conf_score = 0.55
         self.initOut()
 
     def initOut(self):
@@ -63,12 +63,13 @@ class GN():
     def loadAModel(self):
         from mot_model import uphi, ephi, vphi
         model_dir = 'Duke_app2'
-        name = 'all_8'
+        name = 'Pretrained_4'
+        # name = 'all_8'
         if edge_initial == 0:
             i_name = 'IoU'
         elif edge_initial == 1:
             i_name = 'Random'
-        tail = 2
+        tail = 8
         self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%d.pth'%(model_dir, i_name, name, tail)).to(self.device)
         self.AVphi = torch.load('../%s/Results/MOT16/%s/%s/vphi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.AEphi1 = torch.load('../%s/Results/MOT16/%s/%s/ephi1_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
@@ -79,12 +80,12 @@ class GN():
     def loadMModel(self):
         from m_mot_model import uphi, ephi
         model_dir = 'Duke_m'
-        name = 'all_8'
+        name = 'all'
         if edge_initial == 0:
             i_name = 'IoU'
         elif edge_initial == 1:
             i_name = 'Random'
-        tail = 2
+        tail = 8
         self.MUphi = torch.load('../%s/Results/DukeMTMC/%s/%s/uphi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.MEphi = torch.load('../%s/Results/DukeMTMC/%s/%s/ephi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.Mu = torch.load('../%s/Results/DukeMTMC/%s/%s/u_%d.pth'%(model_dir,i_name, name, tail))
@@ -174,8 +175,10 @@ class GN():
             m_n = self.m_train_set.n
 
             if a_m != m_m or a_n != m_n:
-                print 'Something is wrong!'
+                print '\nSomething is wrong!'
                 print 'a_m = %d, m_m = %d'%(a_m, m_m), ', a_n = %d, m_n = %d'%(a_n, m_n)
+                print self.a_train_set.bbx[self.a_train_set.f_step]
+                print self.m_train_set.bbx[self.m_train_set.f_step]
                 raw_input('Continue?')
             # print 'm = %d, n = %d'%(m, n)
             if a_n==0:
@@ -233,6 +236,8 @@ class GN():
             V = self.a_train_set.aggregate(V_CON).view(1, -1)
             u1 = self.AUphi(E, V, self.Au)
 
+            u1 = torch.clamp(u1, max=1.0, min=-1.0)  # Clamp all elements in u1 into the range [ min, max ]
+
             ret = self.a_train_set.getRet()
             decay_tag = [0 for i in xrange(a_m)]
             for i in xrange(a_m):
@@ -266,9 +271,15 @@ class GN():
                 m_tmp = m_tmp.cpu().data.numpy()[0]
 
                 t = line_con[self.cur][a_vs_index][-1]
+                # print a_tmp, m_tmp
                 if decay_tag[a_vs_index] > 0:
-                    A = min(float(a_tmp[0]) * pow(decay, t-1), 1.0)
-                    M = min(float(m_tmp[0]) * pow(decay, t-1), 1.0)
+                    try:
+                        A = min(float(a_tmp[0]) * pow(decay, t + a_t_gap - 2), 1.0)
+                        M = min(float(m_tmp[0]) * pow(decay, t + a_t_gap - 2), 1.0)
+                    except OverflowError:
+                        print 'OverflowError: (34, "Numerical result out of range")'
+                        A = float(a_tmp[0])
+                        M = float(m_tmp[0])
                 else:
                     A = float(a_tmp[0])
                     M = float(m_tmp[0])
@@ -279,6 +290,7 @@ class GN():
 
             # for j in ret:
             #     print j
+
             results = self.hungarian.compute(ret)
 
             out = open(self.outName, 'a')
@@ -304,7 +316,8 @@ class GN():
                 attr2 = line_con[self.nxt][j]
                 # print attrs
                 attr2[1] = str(id)
-                if attr1[-1] > 1:
+                # print attr1, attr2, a_t_gap
+                if attr1[-1] + a_t_gap - 1 > 1:
                     # for the missing detections
                     self.linearModel(out, attr1, attr2)
                 line = ''

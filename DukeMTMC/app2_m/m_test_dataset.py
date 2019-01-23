@@ -38,8 +38,8 @@ class MDatasetFromFolder(data.Dataset):
         width = x2 - x1
         height = y2 - y1
         x1 -= width/12
-        x2 += width/12
-        return x1, y1, width*7/6, height*7/6
+        y1 -= height/12
+        return int(x1), int(y1), int(width*7/6), int(height*7/6)
 
     def getBBx(self, pose):
         x1, x2, y1, y2 = 10000.0, 0.0, 10000.0, 0.0
@@ -62,7 +62,11 @@ class MDatasetFromFolder(data.Dataset):
         conf_score = sum(conf_score)/len(conf_score)
         if conf_score >= self.tau_conf_score:
             x1, y1, w, h = self.fixBBx(x1, y1, x2, y2)
-            return [x1, y1, w, h]
+            if w == 0 or h == 0:
+                return None
+            ratio = h * 1.0 / w
+            if ratio >= 1.0 and ratio <= 4.8:
+                return [float(x1), float(y1), float(w), float(h)]
         return None
 
     def readBBx_det(self):
@@ -272,11 +276,12 @@ class MDatasetFromFolder(data.Dataset):
             self.gap += 1
 
             if self.f_step > SEQLEN:
-                print '           Empty in loadNext:', self.f_step - self.gap + 1, '-', self.gap - 1
+                print '           Empty in loadNext (SEQLEN):', self.f_step - self.gap + 1, '-', self.gap - 1
                 return self.gap
 
             self.feature()
             self.n = len(self.detections[self.nxt])
+            # print len(self.bbx[self.f_step]), self.n
 
         if self.gap > 1:
             print '           Empty in loadNext:', self.f_step-self.gap+1, '-', self.gap-1

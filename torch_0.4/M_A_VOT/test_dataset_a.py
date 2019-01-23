@@ -26,6 +26,8 @@ class ADatasetFromFolder(data.Dataset):
         self.tau_conf_score = tau
         self.show = show
 
+        self.tags_index = []  # tags for index of bbx which is associated with object
+
         self.loadAModel()
         self.getSeqL()
         self.readBBx_det()
@@ -134,12 +136,16 @@ class ADatasetFromFolder(data.Dataset):
 
         if width <= 0 or height <= 0:
             ratio = 0
+            ratio1 = 0
+            ratio2 = 0
         else:
             Area = width * height
             Area1 = width1 * height1
             Area2 = width2 * height2
             ratio = Area * 1. / (Area1 + Area2 - Area)
-        return ratio
+            ratio1 = Area * 1. / Area1
+            ratio2 = Area * 1. / Area2
+        return [ratio, ratio1, ratio2]
 
     def getMN(self, m, n):
         ans = [[None for i in xrange(n)] for i in xrange(m)]
@@ -206,6 +212,7 @@ class ADatasetFromFolder(data.Dataset):
         del self.detections[self.nxt][index]
 
     def updateApp(self, pred, index, gap):
+        # print 'In updateApp:'
         frame = self.f_step - self.gap + gap
         img = load_img(self.img_dir + '%06d.jpg' % frame)  # initial with loading the first frame
 
@@ -215,21 +222,24 @@ class ADatasetFromFolder(data.Dataset):
         ret = self.resnet34(bbx)
         app = ret.data
 
-        self.bbx[self.f_step][index] = [x, y, w, h, frame]
+        # print '     ', index, len(self.bbx[self.f_step-self.gap])
+        # print '     ', self.bbx[self.f_step - self.gap]
+        self.bbx[self.f_step-self.gap][index] = [x, y, w, h, frame]
         self.detections[self.cur][index] = [app, frame]
 
-    def findDetction(self, bbx):
+    def findDetection(self, bbx):
         step = 0
-        index, iou = -1, -1.0
+        ans, iou = -1, -1.0
         for BBx in self.bbx[self.f_step]:
-            tmp = self.IOU(bbx, BBx)
-            if tmp > iou:
-                index = step
+            tmp = self.IOU(bbx, BBx)[0]
+            if tmp > iou and self.tags_index[step]:
+                ans = step
                 iou = tmp
             step += 1
         if iou < 0.5:
             return -1
-        return index
+        self.tags_index[ans] = 0
+        return ans
 
     def addApp(self, bbx):
         frame = self.f_step
@@ -237,7 +247,7 @@ class ADatasetFromFolder(data.Dataset):
         ans.append(frame)
         self.bbx[frame].append(ans)
 
-        img = load_img(self.img_dir + '%06d.jpg' % (frame))  # initial with loading the first frame
+        img = load_img(self.img_dir + '%06d.jpg' % frame)  # initial with loading the first frame
         x, y, w, h = bbx
         crop = img.crop([x, y, x + w, y + h])
         bbx = crop.resize((224, 224), Image.ANTIALIAS)
