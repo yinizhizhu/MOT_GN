@@ -134,12 +134,11 @@ class MDatasetFromFolder(data.Dataset):
         return None
 
     def distance(self, a_bbx, b_bbx):
-        w1 = float(a_bbx[2]) * tau_dis
-        w2 = float(b_bbx[2]) * tau_dis
+        w = min(float(a_bbx[2]) * tau_dis, float(b_bbx[2]) * tau_dis)
         dx = float(a_bbx[0] + a_bbx[2]/2) - float(b_bbx[0] + b_bbx[2]/2)
         dy = float(a_bbx[1] + a_bbx[3]/2) - float(b_bbx[1] + b_bbx[3]/2)
         d = sqrt(dx*dx+dy*dy)
-        if d <= w1 and d <= w2:
+        if d <= w:
             return 0.0
         return tau_threshold
 
@@ -171,17 +170,18 @@ class MDatasetFromFolder(data.Dataset):
         del self.bbx[self.f_step][index]
         del self.detections[self.nxt][index]
 
-    def updateMotion(self, pred, index, gap):
+    def updateMotion(self, bbx, pred, index, gap):
         # print 'In updateMotion:'
         frame = self.f_step - self.gap + gap
 
+        x0, y0, w0, h0, f0 = bbx
         x, y, w, h = pred
         # print '     ', index, len(self.bbx[self.f_step])
         # print '     ', self.bbx[self.f_step]
         x, y, w, h = x/self.width, y/self.height, w/self.width, h/self.height
+        vx, vy = (x-x0)/self.width, (y-y0)/self.height
         cur_m = []
-        for i in xrange(self.m):
-            cur_m.append(torch.FloatTensor([[x, y, w, h, 0.0, 0.0]]).to(self.device))
+        cur_m.append(torch.FloatTensor([[x, y, w, h, vx, vy]]).to(self.device))
 
         self.bbx[self.f_step - self.gap][index] = [float(x), float(y), float(w), float(h), frame]
         self.detections[self.cur][index] = [cur_m, frame]
@@ -230,7 +230,7 @@ class MDatasetFromFolder(data.Dataset):
             for j in xrange(n):
                 p = random.random()
                 # 1 - match, 0 - mismatch
-                ans[i][j] = torch.FloatTensor([1 - p, p])
+                ans[i][j] = torch.FloatTensor([(1 - p)/100.0, p/100.0])
         return ans
 
     def feature(self, tag=0):

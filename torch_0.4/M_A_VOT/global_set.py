@@ -1,6 +1,6 @@
 u_initial = 1  # 1 - random, 0 - 0
 
-edge_initial = 1  # 3 - 0.5, 2 - appearance similarity, 1 - random, 0 - IoU
+edge_initial = 0  # 3 - 0.5, 2 - appearance similarity, 1 - random, 0 - IoU
 #  Average epoch: 34.9520958084 for Random. The final time consuming:4245.31065106
 #  Average epoch: 33.577245509 for IoU. The final time consuming:3791.01934195
 
@@ -29,24 +29,24 @@ else:
 decay = 1.9
 decay_dir = '_decay'
 
-f_gap = 5
+f_gap = 0
 if f_gap == 5:
     recover_dir = '_Recover'
 else:
     recover_dir = '_NoRecover'
 
 
-tau_threshold = 1.0  # The threshold of matching cost
-tau_dis = 2.0   # The times of the current bbx's scale
-tau_vr = 0.5    # The visibility ratio shouldn't be too small
-tau_frame = 25  # The difference of the anchor and positive should be near
 
-gap = 25    # max frame number for side connection
+tau_threshold = 1.0     # The threshold of matching cost
+tau_dis = 2.0           # The times of the current bbx's scale
+tau_size = 0.4          # The ratio between object and detection
+tau_vr = 0.5            # The visibility ratio shouldn't be too small
+tau_frame = 25          # The difference of the anchor and positive should be near
 
-show_recovering = 0  # 1 - 11, 0 - 10
-overlap = 0.85  # the IoU
+gap = 25                # max frame number for side connection
 
-vot_conf_score = 0.8
+show_recovering = 0     # 1 - 11, 0 - 10
+overlap = 0.85          # the IoU
 
 # edge_init|                       random                       |
 #  u_init  |        random           |            learned

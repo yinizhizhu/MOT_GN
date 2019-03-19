@@ -39,7 +39,7 @@ lengths = [525, 900, 750]
 # seqs = [11]
 # lengths = [900]
 
-tt_tag = 0  # 1 - test, 0 - train
+tt_tag = 1  # 1 - test, 0 - train
 
 tau_conf_score = 0.0
 
@@ -70,21 +70,10 @@ class GN():
         self.loadMModel()
         self.loadVOT()
 
-        # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_tau_tdir1.0/'%(type,
-        #                                                                        self.alpha,
-        #                                                                        decay_dir, decay,
-        #                                                                        recover_dir, u_dir)
-
-        # 1.9 - decay_tag > 0, 1.1~1.8 - decay_tag > 1
-        self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f/'%(type,
+        self.out_dir = t_dir + 'motmetrics_%s_7_%.1f%s_%.2f%s%s_vc_%.2f_bb_exp/'%(type,
                                                                                self.alpha,
                                                                                decay_dir, decay,
                                                                                recover_dir, u_dir, vot_conf_score)
-
-        # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f_exp/'%(type,
-        #                                                                        self.alpha,
-        #                                                                        decay_dir, decay,
-        #                                                                        recover_dir, u_dir, vot_conf_score)
 
         print '		', self.out_dir
         if not os.path.exists(self.out_dir):
@@ -96,11 +85,11 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
-        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
 
-        gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
-        self.copyLines(self.seq_index, 1, gt_training, self.tt)
+        # gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
+        # self.copyLines(self.seq_index, 1, gt_training, self.tt)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
@@ -507,7 +496,7 @@ class GN():
             #     for i in xrange(a_n):
             #         print i, self.line_con[self.nxt][i], self.id_con[self.nxt][i], self.a_train_set.bbx[self.a_train_set.f_step][i]
 
-            self.doTracking(a_t_gap)
+            # self.doTracking(a_t_gap)
 
             self.a_train_set.counter()
             self.m_train_set.counter()
@@ -632,7 +621,7 @@ class GN():
                 else:
                     A = float(a_tmp[0])
                     M = float(m_tmp[0])
-                ret[a_vs_index][a_vr_index] = A*self.alpha + M*(1-self.alpha)
+                ret[a_vs_index][a_vr_index] *= A*self.alpha + M*(1-self.alpha)
 
             # self.a_train_set.showE(outFile)
             # self.m_train_set.showE(outFile)
@@ -736,8 +725,6 @@ class GN():
             self.linearModel(attr1, attr2, 'Main')
 
         if u_update:
-            m_u_ = torch.clamp(m_u_, max=1.0, min=-1.0)  # make sure that the global variable not that big
-            u1 = torch.clamp(u1, max=1.0, min=-1.0)
             self.Mu = m_u_.data
             self.Au = u1.data
 
@@ -818,9 +805,9 @@ if __name__ == '__main__':
                     os.mkdir(f_dir)
                     print f_dir, 'does not exist!'
 
-                for i in xrange(len(seqs)):
-                    seq_index = seqs[i]
-                    tt = lengths[i]
+                for i in xrange(len(test_seqs)):
+                    seq_index = test_seqs[i]
+                    tt = test_lengths[i]
                     print 'The sequence:', seq_index, '- The length of the training data:', tt
 
                     s_dir = f_dir + '%02d/' % seq_index

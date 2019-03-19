@@ -5,7 +5,7 @@ from math import *
 from PIL import Image
 import torch.nn.functional as F
 from mot_model import appearance
-from global_set import edge_initial, test_gt_det, tau_dis, app_fine_tune, fine_tune_dir, tau_threshold#, tau_conf_score
+from global_set import tau_dis, tau_size, app_fine_tune, fine_tune_dir, tau_threshold
 from torchvision.transforms import ToTensor
 
 
@@ -138,6 +138,7 @@ class ADatasetFromFolder(data.Dataset):
             ratio = 0
             ratio1 = 0
             ratio2 = 0
+            Area = 0.0
         else:
             Area = width * height
             Area1 = width1 * height1
@@ -145,7 +146,7 @@ class ADatasetFromFolder(data.Dataset):
             ratio = Area * 1. / (Area1 + Area2 - Area)
             ratio1 = Area * 1. / Area1
             ratio2 = Area * 1. / Area2
-        return [ratio, ratio1, ratio2]
+        return [ratio, ratio1, ratio2, Area]
 
     def getMN(self, m, n):
         ans = [[None for i in xrange(n)] for i in xrange(m)]
@@ -153,7 +154,7 @@ class ADatasetFromFolder(data.Dataset):
             for j in xrange(n):
                 p = random.random()
                 # 1 - match, 0 - mismatch
-                ans[i][j] = torch.FloatTensor([1 - p, p]).to(self.device)
+                ans[i][j] = torch.FloatTensor([(1 - p)/100.0, p/100.0]).to(self.device)
         return ans
 
     def aggregate(self, set):
@@ -164,13 +165,29 @@ class ADatasetFromFolder(data.Dataset):
         return None
 
     def distance(self, a_bbx, b_bbx):
-        w1 = float(a_bbx[2]) * tau_dis
-        w2 = float(b_bbx[2]) * tau_dis
-        dx = float(a_bbx[0] + a_bbx[2]/2) - float(b_bbx[0] + b_bbx[2]/2)
-        dy = float(a_bbx[1] + a_bbx[3]/2) - float(b_bbx[1] + b_bbx[3]/2)
+        wa, ha = float(a_bbx[2]), float(a_bbx[3])
+        wb, hb = float(b_bbx[2]), float(b_bbx[3])
+        # if wa*ha*wb*hb == 0.0:
+        #     print 'Something is wrong! The acreage of bounding box is zero:', wa, ha, wb, hb
+        #     ratio = 0.0
+        # else:
+        #     ratiow = wa/wb
+        #     if ratiow < 1.0:
+        #         ratiow = 1/ratiow
+        #     ratioh = ha/hb
+        #     if ratioh < 1.0:
+        #         ratioh = 1/ratioh
+        #     ratio = max(ratiow, ratioh) - 1.0
+
+        w = min(wa,  wb) * tau_dis
+        dx = float(a_bbx[0] + wa/2) - float(b_bbx[0] + wb/2)
+        dy = float(a_bbx[1] + ha/2) - float(b_bbx[1] + hb/2)
         d = sqrt(dx*dx+dy*dy)
-        if d <= w1 and d <= w2:
+        if d <= w:
             return 0.0
+            # return d/w  # Linear
+            # d = (w-d)/w
+            # return exp(-d*d*4.0)  # exp(-x^2)
         return tau_threshold
 
     def getRet(self):
@@ -180,6 +197,10 @@ class ADatasetFromFolder(data.Dataset):
             bbx1 = self.bbx[cur][i]
             for j in xrange(self.n):
                 ret[i][j] = self.distance(bbx1, self.bbx[self.f_step][j])
+            #     if self.f_step > 198:
+            #         print i, j, bbx1, self.bbx[self.f_step][j], ret[i][j]
+            # if self.f_step > 198:
+            #     print ''
         return ret
 
     def getApp(self, tag, index):
@@ -229,16 +250,20 @@ class ADatasetFromFolder(data.Dataset):
 
     def findDetection(self, bbx):
         step = 0
-        ans, iou = -1, -1.0
+        ans, acreage = -1, -1.0
         for BBx in self.bbx[self.f_step]:
-            tmp = self.IOU(bbx, BBx)[0]
-            if tmp > iou and self.tags_index[step]:
+            ratio = self.IOU(bbx, BBx)
+            tmpa = ratio[3]
+            if ratio[2] >= 0.5 and tmpa > acreage and self.tags_index[step]:
                 ans = step
-                iou = tmp
+                acreage = tmpa
             step += 1
-        if iou < 0.5:
-            return -1
-        self.tags_index[ans] = 0
+
+        # if self.f_step > 198:
+        #     print 'FindDetection:', bbx, 'Index:', ans, self.tags_index[ans]
+
+        if ans >= 0:  # beat myself
+            self.tags_index[ans] = 0
         return ans
 
     def addApp(self, bbx):

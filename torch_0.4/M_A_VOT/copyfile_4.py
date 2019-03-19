@@ -7,13 +7,20 @@ types = ['DPM0', 'FRCNN', 'SDP']
 seqs = [9, 11, 13]  # the set of sequences
 lengths = [525, 900, 750]  # the length of the sequence
 
-name2 = 'MOT_M_ANew_bb'
+recover = ''
+
+name2 = 'MOT_M_ANew_VOT_VC_%sRecover'%recover
+# name2 = 'MOT_M_ANew_bb_%sRecover'%recover
 test_seqs = [9, 11, 13]
 
+
 # copy the results for testing sets
-for type in types:
+for type in types[0:]:
     for i in xrange(len(seqs)):
-        src_dir = 'Results/MOT%d/Random/%02d/%d/%s_%s_4_0.7_decay_1.90_NoRecover_uupdate_tau_tdir1.0/res_training.txt'%(year, seqs[i], lengths[i], name, type)
+        # src_dir = 'Results/MOT%d/Random/%02d/%d/%s_%s_4_0.7_decay_1.90_%sRecover_uupdate_vc_0.99/res_training.txt'\
+        #           %(year, seqs[i], lengths[i], name, type, recover)
+        src_dir = 'Results/MOT%d/Random/%02d/%d/%s_%s_4_0.7_decay_1.90_%sRecover_uupdate_vc_0.99/res_training.txt'\
+                  %(year, seqs[i], lengths[i], name, type, recover)
 
         des_d = '../Validation/%s/'%(name2)
         if not os.path.exists(des_d):
@@ -23,4 +30,3 @@ for type in types:
         print src_dir
         print des_dir
         shutil.copyfile(src_dir, des_dir)
-
