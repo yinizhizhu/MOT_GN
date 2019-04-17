@@ -27,19 +27,28 @@ type = ''
 t_dir = ''  # the dir of the final level
 sequence_dir = ''  # the dir of the training dataset
 
-# seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
-# lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
-#
-test_seqs = [1, 3, 6, 7, 8, 12, 14]
-test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
+# 7 - training with all the sequences for final model
+# 4 - training with four sequences for selecting best parameters
+# 0 - training with all the sequences but only first 80% of sequence for training, and the rest for validation
+train_set_num = 0
 
-seqs = [9, 11, 13]
-lengths = [525, 900, 750]
+if train_set_num == 0:
+    seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
+    lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
 
-# seqs = [11]
-# lengths = [900]
+    # seqs = [10]
+    # lengths = [654]
 
-tt_tag = 1  # 1 - test, 0 - train
+    test_seqs = [1, 3, 6, 7, 8, 12, 14]
+    test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
+else:
+    seqs = [9, 11, 13]
+    lengths = [525, 900, 750]
+
+    test_seqs = [9, 11, 13]
+    test_lengths = [525, 900, 750]
+
+tt_tag = 0  # 1 - test, 0 - train
 
 tau_conf_score = 0.0
 
@@ -48,7 +57,7 @@ vot_conf_score = 0.99
 # decay = 0.0
 
 class GN():
-    def __init__(self, seq_index, tt, a, cuda=True):
+    def __init__(self, seq_index, begin, end, a, cuda=True):
         '''
         Evaluating with the MotMetrics
         :param seq_index: the number of the sequence
@@ -60,7 +69,8 @@ class GN():
         self.seq_index = seq_index
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
-        self.tt = tt
+        self.begin = begin
+        self.end = end
         self.alpha = a
         self.missingCounter = 0
         self.sideConnection = 0
@@ -70,10 +80,28 @@ class GN():
         self.loadMModel()
         self.loadVOT()
 
-        self.out_dir = t_dir + 'motmetrics_%s_7_%.1f%s_%.2f%s%s_vc_%.2f/'%(type,
-                                                                               self.alpha,
-                                                                               decay_dir, decay,
-                                                                               recover_dir, u_dir, vot_conf_score)
+        if train_set_num == 4:
+            # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_tau_tdir1.0/'%(type,
+            #                                                                        self.alpha,
+            #                                                                        decay_dir, decay,
+            #                                                                        recover_dir, u_dir)
+
+            # 1.9 - decay_tag > 0, 1.1~1.8 - decay_tag > 1
+
+            self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f/'%(type,
+                                                                                   self.alpha,
+                                                                                   decay_dir, decay,
+                                                                                   recover_dir, u_dir, vot_conf_score)
+
+            # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f_exp/'%(type,
+            #                                                                        self.alpha,
+            #                                                                        decay_dir, decay,
+            #                                                                        recover_dir, u_dir, vot_conf_score)
+        else:
+            self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f_dseq_new/'%(type,
+                                                                                   self.alpha,
+                                                                                   decay_dir, decay,
+                                                                                   recover_dir, u_dir, vot_conf_score)
 
         print '		', self.out_dir
         if not os.path.exists(self.out_dir):
@@ -85,20 +113,20 @@ class GN():
 
     def initOut(self):
         print '     Loading Data...'
-        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
-        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/test/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.a_train_set = ADatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
+        self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
 
-        # gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
-        # self.copyLines(self.seq_index, 1, gt_training, self.tt)
+        gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
+        self.copyLines(self.seq_index, self.begin, gt_training, self.end)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
         self.createTxt(detection_dir)
         self.createTxt(res_training)
-        self.copyLines(self.seq_index, 1, detection_dir, self.tt, 1)
+        self.copyLines(self.seq_index, self.begin, detection_dir, self.end, 1)
 
         self.out = open(res_training, 'w')
-        self.evaluation(1, self.tt, detection_dir)
+        self.evaluation(self.begin, self.end, detection_dir)
         self.out.close()
 
     def getSeqL(self, info):
@@ -125,7 +153,7 @@ class GN():
             basic_dir = '../MOT/MOT%d/test/MOT%d-%02d-%s/' % (year, year, seq, type)
         else:
             basic_dir = '../MOT/MOT%d/train/MOT%d-%02d-%s/' % (year, year, seq, type)
-        print '     Testing on', basic_dir, 'Length:', self.tt
+        print '     Testing on', basic_dir, 'Length:', self.end - self.begin+1
         seqL = tail if tail != -1 else self.getSeqL(basic_dir + 'seqinfo.ini')
 
         det_dir = 'gt/gt_det.txt' if test_gt_det else 'det/det.txt'
@@ -155,15 +183,14 @@ class GN():
 
     def loadAModel(self):
         from mot_model import uphi, ephi, vphi
+        name = '%s_%d'%(app_dir, train_set_num)
         if edge_initial == 0:
             model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
             i_name = 'Random'
-        tail = 10
+        tail = 10 if train_set_num == 4 else 13
         self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%02d.pth'%(model_dir, i_name, name, tail)).to(self.device)
         self.AVphi = torch.load('../%s/Results/MOT16/%s/%s/vphi_%02d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.AEphi1 = torch.load('../%s/Results/MOT16/%s/%s/ephi1_%02d.pth'%(model_dir,i_name, name, tail)).to(self.device)
@@ -173,15 +200,14 @@ class GN():
 
     def loadMModel(self):
         from m_mot_model import uphi, ephi
+        name = 'all_%d'%train_set_num
         if edge_initial == 0:
             model_dir = 'Motion1_bb'
-            name = 'all_4'
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'Motion1_bb'
-            name = 'all_4'
             i_name = 'Random'
-        tail = 10
+        tail = 10 if train_set_num == 4 else 13
         self.MUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.MEphi = torch.load('../%s/Results/MOT16/%s/%s/ephi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.Mu = torch.load('../%s/Results/MOT16/%s/%s/u_%d.pth'%(model_dir,i_name, name, tail))
@@ -251,27 +277,6 @@ class GN():
                 self.outputLine(attr1, 'Recovering')
         self.missingCounter += t - 1
 
-    def checker(self, bbxes, len):
-        """
-        Finding the detections which do not have large IOU with their neighbor detections
-        :param bbxes: Container of boudning boxes
-        :param len: The number of bounding boxes
-        :return: The results of judging whether the detection can tracked with VOT or not
-        """
-        ans = [1 for i in xrange(len)]
-        for i in xrange(len-1):
-            for j in xrange(i+1, len):
-                if ans[j]:
-                    ratio = self.a_train_set.IOU(bbxes[i], bbxes[j])
-                    if ratio[1] >= 0.5 and ratio[2] >= 0.5:
-                        ans[i] = 0
-                        ans[j] = 0
-                    if ratio[1] >= 0.8:
-                        ans[i] = 0
-                    if ratio[2] >= 0.8:
-                        ans[j] = 0
-        return ans
-
     def vot(self, bbx):
         """
         Tracking with VOT (DaSiamRPN)
@@ -293,64 +298,16 @@ class GN():
         bbx = [int(l) for l in res]
         return bbx, score
 
-    def tracking_vot(self, gap, update=True):
-        if update == False:
-            if self.a_train_set.n != len(self.a_train_set.bbx[self.a_train_set.f_step]):
-                print 'The length is wrong!'
-            self.a_train_set.tags_index = [1 for i in xrange(self.a_train_set.n)]
-
-        indexes = []
-        tracked_pred = []
+    def tracking_vot(self, gap, index):
         frame = self.a_train_set.f_step - self.a_train_set.gap
-        step = len(self.a_train_set.bbx[frame])
-        ans = self.checker(self.a_train_set.bbx[frame], step)
         self.img = cv2.imread(self.a_train_set.img_dir + '%06d.jpg' % (frame+gap))
-        step -= 1
-        while step >= 0:
-            if ans[step]:
-                tmp_bbx = self.m_train_set.bbx[frame][step]
-                if tmp_bbx[2]*tmp_bbx[3] >= 0.001:
-                    bbx = self.a_train_set.bbx[frame][step]
-                    pred, score = self.vot(bbx)
 
-                    # if self.a_train_set.f_step > 198:
-                    #     print self.id_con[self.cur][step], pred, score
+        bbx = self.a_train_set.bbx[frame][index]
+        pred, score = self.vot(bbx)
+        if score >= vot_conf_score:
+            return pred
 
-                    if score >= vot_conf_score:
-
-                        # if self.a_train_set.f_step > 198:
-                        #     print 'Success'
-
-                        tracked_pred.append([step, pred])
-                        if update:
-                            self.a_train_set.updateApp(pred, step, gap)
-                            self.m_train_set.updateMotion(bbx, pred, step, gap)
-                        else:
-                            self.a_train_set.delAppCur(step)
-                            self.m_train_set.delMotionCur(step)
-                            index = self.a_train_set.findDetection(pred)
-                            if index >= 0:
-                                indexes.append(index)
-            step -= 1
-
-        indexes = sorted(indexes, reverse=True)
-
-        # print 'Tracking_vot', '*'*30
-        # print indexes
-        # print len(self.line_con[self.nxt]), self.line_con[self.nxt]
-        # print len(self.id_con[self.nxt]), self.id_con[self.nxt]
-
-        if update == False:
-            # print 'tags_index:', self.a_train_set.tags_index
-            # print len(indexes), len(self.line_con[self.nxt]),
-            # print indexes
-            for index in indexes:
-                del self.line_con[self.nxt][index]
-                del self.id_con[self.nxt][index]
-                self.a_train_set.delAppNxt(index)
-                self.m_train_set.delMotionNxt(index)
-
-        return tracked_pred
+        return None
 
     def transfer(self, line, pred, frame):
         attr = []
@@ -363,69 +320,44 @@ class GN():
         attr[-1] = 1
         return attr
 
-    def doTracking(self, a_t_gap):
+    def doTracking(self, a_t_gap, index):
         # @We first do tracking with DaSiamRPN.
         frame = self.a_train_set.f_step - a_t_gap
         for gap in xrange(1, a_t_gap):
             # print '\n Container:'
             # print self.line_con[self.cur]
             # print self.line_con[self.nxt]
-            tracked_pred = self.tracking_vot(gap, True)
-            if len(tracked_pred):
-                for index, pred in tracked_pred:
-                    attr1 = self.line_con[self.cur][index]
-                    # print 'Attr1:', attr1
-                    attr2 = self.transfer(attr1, pred, frame + gap)
-                    self.linearModel(attr1, attr2, 'doTracking1')
-                    # print 'Frame:', frame+gap
-                    # print 'Attr2:', attr2
-                    # print 'Attr1_after:', attr1
-                    self.line_con[self.cur][index] = attr2
-                    # print self.line_con[self.cur][index]
-                    # raw_input('Continue?')
-
-        tracked_pred = self.tracking_vot(a_t_gap, False)
-        if len(tracked_pred):
-            # print 'DoTracking', '-'*30
-            # print tracked_pred
-
-            for p in tracked_pred:
-                index, pred = p
-
-                # print '*'*36
-                # print index
-                # print len(self.line_con[self.cur]), self.line_con[self.cur]
-
+            pred = self.tracking_vot(gap, index)
+            if pred is not None:
                 attr1 = self.line_con[self.cur][index]
-                attr2 = self.transfer(attr1, pred, frame + a_t_gap)
-                self.linearModel(attr1, attr2, 'doTracking2')
-                self.line_backup.append(attr2)
-                self.id_backup.append(self.id_con[self.cur][index])
-                del self.line_con[self.cur][index]
-                del self.id_con[self.cur][index]
+                # print ' Attr1:', attr1
+                attr2 = self.transfer(attr1, pred, frame + gap)
+                self.linearModel(attr1, attr2, 'doTracking1')
+                # print 'Frame:', frame+gap
+                # print ' Attr2:', attr2
+                # print ' Attr1_after:', attr1
+                self.line_con[self.cur][index] = attr2
+                # print self.line_con[self.cur][index]
+                # raw_input('Continue?')
 
-    def addBackup(self):
-        # print '*'*30
-        # print 'Cur:', self.id_con[self.cur]
-        # print 'Nxt:', self.id_con[self.nxt]
-        n = len(self.line_backup)
-        for i in xrange(n):
-            line = self.line_backup[i]
-            id = self.id_backup[i]
+        pred = self.tracking_vot(a_t_gap, index)
+        if pred is not None:
+            attr1 = self.line_con[self.cur][index]
+            # print '     Attr1:', attr1
+            attr2 = self.transfer(attr1, pred, frame + a_t_gap)
+            self.linearModel(attr1, attr2, 'doTracking2')
+            # print '     Attr2:', attr2
+            # print '     Attr1_after:', attr1
 
-            bbx = [int(line[2]), int(line[3]), int(line[4]), int(line[5])]
+            # self.a_train_set.addApp(pred)
+            # self.m_train_set.addMotion(pred)
+            self.a_train_set.moveApp(index)
+            self.m_train_set.moveMotion(index)
 
-            self.a_train_set.addApp(bbx)
-            self.m_train_set.addMotion(bbx)
-
-            self.line_con[self.nxt].append(line)
-            self.id_con[self.nxt].append(id)
-
-        # print 'Cur2:', self.id_con[self.cur]
-        # print 'Nxt2:', self.id_con[self.nxt]
-
-        self.line_backup = []
-        self.id_backup = []
+            self.line_con[self.nxt].append(attr2)
+            self.id_con[self.nxt].append(self.id_con[self.cur][index])
+            return True
+        return False
 
     def evaluation(self, head, tail, gtFile):
         '''
@@ -441,8 +373,6 @@ class GN():
         self.img = None
         self.line_con = [[], []]
         self.id_con = [[], []]
-        self.line_backup = []
-        self.id_backup = []
         self.id_step = 1
 
         a_step = head + self.a_train_set.setBuffer(head)
@@ -482,63 +412,7 @@ class GN():
                 print 'Something is wrong!'
                 print 'a_m = %d, m_m = %d' % (a_m, m_m), ', a_n = %d, m_n = %d' % (a_n, m_n)
                 raw_input('Continue?')
-
             self.loadNxt(gtIn, a_n)
-
-            # show_p = 198
-            # if a_step > show_p:
-            #     print
-            #     print 'Before tracking, loading the bounding boxes in current & next frame:'
-            #     print 'Current:'
-            #     for i in xrange(a_m):
-            #         print i, self.line_con[self.cur][i], self.id_con[self.cur][i], self.a_train_set.bbx[self.a_train_set.f_step-a_t_gap][i]
-            #     print 'Next:'
-            #     for i in xrange(a_n):
-            #         print i, self.line_con[self.nxt][i], self.id_con[self.nxt][i], self.a_train_set.bbx[self.a_train_set.f_step][i]
-
-            self.doTracking(a_t_gap)
-
-            self.a_train_set.counter()
-            self.m_train_set.counter()
-
-            a_m, m_m = self.a_train_set.m, self.m_train_set.m
-            a_n, m_n = self.a_train_set.n, self.m_train_set.n
-            if a_m != m_m or a_n != m_n:
-                print 'Something is wrong!'
-                print 'a_m = %d, m_m = %d' % (a_m, m_m), ', a_n = %d, m_n = %d' % (a_n, m_n)
-                raw_input('Continue?')
-
-            if a_n == 0 or a_m == 0:
-                # print 'There is no detection in the next frame!'
-                # print '*'*30
-                # print a_m, len(self.line_con[self.cur])
-                # print self.line_con[self.cur]
-
-                for index in xrange(a_n):
-                    attrs = self.line_con[self.nxt][index]
-                    attrs[1] = str(self.id_step)
-                    self.outputLine(attrs, 'Output')
-                    self.id_con[self.nxt][index] = self.id_step
-                    self.id_step += 1
-
-                for index in xrange(a_m):
-                    attrs = self.line_con[self.cur][index]
-                    # print '*', attrs, '*'
-                    if attrs[-1] + a_t_gap <= gap:
-                        attrs[-1] += a_t_gap
-                        self.line_con[self.nxt].append(attrs)
-                        self.id_con[self.nxt].append(self.id_con[self.cur][index])
-                        self.a_train_set.moveApp(index)
-                        self.m_train_set.moveMotion(index)
-
-                self.addBackup()
-                self.line_con[self.cur] = []
-                self.id_con[self.cur] = []
-                # print head+step, results
-                self.a_train_set.swapFC()
-                self.m_train_set.swapFC()
-                self.swapFC()
-                continue
 
             self.a_train_set.loadPre()
             self.m_train_set.loadPre()
@@ -573,13 +447,6 @@ class GN():
                     if ret[i][j] == 0:
                         decay_tag[i] += 1
 
-            # if a_step > show_p:
-            #     print '     Ret:'
-            #     tmp = 0
-            #     for p in ret:
-            #         print tmp, p
-            #         tmp += 1
-
             for i in xrange(len(self.a_train_set.candidates)):
                 e1, vs, vr1, a_vs_index, a_vr_index = candidates[i]
                 m_e, m_vs_index, m_vr_index = self.m_train_set.candidates[i]
@@ -610,10 +477,10 @@ class GN():
                 # M = float(m_tmp[0]) * pow(decay, t-1)
                 if decay_tag[a_vs_index] > 0:
                     try:
-                        A = min(float(a_tmp[0]) * pow(decay, t + a_t_gap -2), 0.999999999999)
-                        M = min(float(m_tmp[0]) * pow(decay, t + a_t_gap -2), 0.999999999999)
-                        # A = min(float(a_tmp[0]) * pow(decay, t + a_t_gap -2), 1.0)
-                        # M = min(float(m_tmp[0]) * pow(decay, t + a_t_gap -2), 1.0)
+                        # A = min(float(a_tmp[0]) * pow(decay, t + a_t_gap -2), 0.999999999999)
+                        # M = min(float(m_tmp[0]) * pow(decay, t + a_t_gap -2), 0.999999999999)
+                        A = min(float(a_tmp[0]) * pow(decay, t + a_t_gap -2), 1.0)
+                        M = min(float(m_tmp[0]) * pow(decay, t + a_t_gap -2), 1.0)
                     except OverflowError:
                         print 'OverflowError!'
                         A = float(a_tmp[0])
@@ -623,36 +490,7 @@ class GN():
                     M = float(m_tmp[0])
                 ret[a_vs_index][a_vr_index] = A*self.alpha + M*(1-self.alpha)
 
-            # self.a_train_set.showE(outFile)
-            # self.m_train_set.showE(outFile)
-
-            # if a_step > show_p:
-            #     print
-            #     print 'Current:'
-            #     for i in xrange(a_m):
-            #         print i, self.line_con[self.cur][i], self.id_con[self.cur][i]
-            #     print 'Next:'
-            #     for i in xrange(a_n):
-            #         print i, self.line_con[self.nxt][i], self.id_con[self.nxt][i]
-            #     print '     Ret:'
-            #     tmp = 0
-            #     for p in ret:
-            #         print tmp, p
-            #         tmp += 1
-
-            results = self.tracking(ret, a_n, m_u_, u1)
-
-            # if a_step > show_p:
-            #     for (i, j) in results:
-            #         print (i, j)
-            #         print self.line_con[self.nxt][j], self.id_con[self.nxt][j]
-            #     raw_input('Continue?')
-
-            self.output(a_n)
-
-            self.miss_occlu(results, a_t_gap, ret, a_m)
-
-            self.addBackup()
+            self.tracking(ret, a_m, a_n, m_u_, u1, a_t_gap)
 
             self.line_con[self.cur] = []
             self.id_con[self.cur] = []
@@ -693,11 +531,27 @@ class GN():
                 self.id_con[self.nxt].append(-1)
                 i += 1
 
-    def tracking(self, ret, a_n, m_u_, u1):
-        # for j in ret:
-        #     print j
+    def tracking(self, ret, a_m, a_n, m_u_, u1, a_t_gap):
         results = self.hungarian.compute(ret)
 
+        # if self.a_train_set.f_step > 532:
+        #     print '\nCur:'
+        #     for i in xrange(len(self.line_con[self.cur])):
+        #         print ' Index:', i, '- ID:', self.id_con[self.cur][i], '- line:', self.line_con[self.cur][i]
+        #     print 'Ret:'
+        #     for i in xrange(len(ret)):
+        #         print " Index:", i, '- D:', ret[i]
+        #     print 'Nxt:'
+        #     for i in xrange(len(self.line_con[self.nxt])):
+        #         print ' Index:', i, '- ID:', self.id_con[self.nxt][i], '- line:', self.line_con[self.nxt][i]
+        #     print 'Association:'
+        #     for (i, j) in results:
+        #         print ' Index:', i, '- ID:', self.id_con[self.cur][i], '- line:', self.line_con[self.cur][i]
+        #         print '     Index:', j, '- line:', self.line_con[self.nxt][j]
+        #     print ''
+        #     raw_input('Continue?')
+
+        keeper = set(i for i in xrange(a_m))
         look_up = set(j for j in xrange(a_n))
         nxt = self.a_train_set.nxt
         for (i, j) in results:
@@ -711,6 +565,7 @@ class GN():
             vr1 = self.AVphi(e1, vs, vr, self.Au)
             self.a_train_set.detections[nxt][j][0] = vr1.data
 
+            keeper.remove(i)
             look_up.remove(j)
             self.m_train_set.updateVelocity(i, j, False)
 
@@ -725,14 +580,23 @@ class GN():
             self.linearModel(attr1, attr2, 'Main')
 
         if u_update:
-            m_u_ = torch.clamp(m_u_, max=1.0, min=-1.0)  # make sure that the global variable not that big
-            u1 = torch.clamp(u1, max=1.0, min=-1.0)
+            # m_u_ = torch.clamp(m_u_, max=1.0, min=-1.0)  # make sure that the global variable not that big
+            # u1 = torch.clamp(u1, max=1.0, min=-1.0)
             self.Mu = m_u_.data
             self.Au = u1.data
 
+        remainer = set()
+        for i in keeper:
+            if self.doTracking(a_t_gap, i) == False:
+                remainer.add(i)
+
         for j in look_up:
             self.m_train_set.updateVelocity(-1, j, tag=False)
-        return results
+
+        self.output(a_n)
+
+        self.miss_occlu(a_t_gap, remainer)
+        # self.miss_occlu(a_t_gap, keeper)
 
     def output(self, a_n):
         for i in xrange(a_n):
@@ -743,31 +607,9 @@ class GN():
                 self.outputLine(attrs, 'Output')
                 self.id_step += 1
 
-    def miss_occlu(self, results, a_t_gap, ret, a_m):
+    def miss_occlu(self, a_t_gap, remainer):
         # For missing & Occlusion
-        index = 0
-        for (i, j) in results:
-            while i != index:
-                attrs = self.line_con[self.cur][index]
-                # print '*', attrs, '*'
-                if attrs[-1] + a_t_gap <= gap:
-                    attrs[-1] += a_t_gap
-                    self.line_con[self.nxt].append(attrs)
-                    self.id_con[self.nxt].append(self.id_con[self.cur][index])
-                    self.a_train_set.moveApp(index)
-                    self.m_train_set.moveMotion(index)
-                index += 1
-            if ret[i][j] >= tau_threshold:
-                attrs = self.line_con[self.cur][index]
-                # print '*', attrs, '*'
-                if attrs[-1] + a_t_gap <= gap:
-                    attrs[-1] += a_t_gap
-                    self.line_con[self.nxt].append(attrs)
-                    self.id_con[self.nxt].append(self.id_con[self.cur][index])
-                    self.a_train_set.moveApp(index)
-                    self.m_train_set.moveMotion(index)
-            index += 1
-        while index < a_m:
+        for index in remainer:
             attrs = self.line_con[self.cur][index]
             # print '*', attrs, '*'
             if attrs[-1] + a_t_gap <= gap:
@@ -776,21 +618,20 @@ class GN():
                 self.id_con[self.nxt].append(self.id_con[self.cur][index])
                 self.a_train_set.moveApp(index)
                 self.m_train_set.moveMotion(index)
-            index += 1
 
 start_a = time.time()
 if __name__ == '__main__':
     try:
-        # for a in xrange(9):
-            # decay = 1.1 + a/10.0
-        for i in xrange(1):
+        for a in xrange(91, 99):
+            vot_conf_score = a/100.0
+        # for i in xrange(1):
             if not os.path.exists('Results/'):
                 os.mkdir('Results/')
 
-            types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
+            # types = [['DPM0', -0.6], ['SDP', 0.5], ['FRCNN', 0.5]]
             # types = [['DPM0', -0.6]]
             # types = [['SDP', 0.5]]
-            # types = [['FRCNN', 0.5]]
+            types = [['FRCNN', 0.5]]
             for t in types:
                 type, tau_conf_score = t
                 head = time.time()
@@ -807,17 +648,21 @@ if __name__ == '__main__':
                     os.mkdir(f_dir)
                     print f_dir, 'does not exist!'
 
-                for i in xrange(len(test_seqs)):
-                    seq_index = test_seqs[i]
-                    tt = test_lengths[i]
-                    print 'The sequence:', seq_index, '- The length of the training data:', tt
+                for i in xrange(len(seqs)):
+                    seq_index = seqs[i]
+                    begin = 1
+                    end = lengths[i]
+                    if train_set_num == 0:
+                        begin = int(end*0.8)
+
+                    print 'The sequence:', seq_index, '- The length of the training data:', end - begin+1
 
                     s_dir = f_dir + '%02d/' % seq_index
                     if not os.path.exists(s_dir):
                         os.mkdir(s_dir)
                         print s_dir, 'does not exist!'
 
-                    t_dir = s_dir + '%d/' % tt
+                    t_dir = s_dir + '%d/' % end
                     if not os.path.exists(t_dir):
                         os.mkdir(t_dir)
                         print t_dir, 'does not exist!'
@@ -829,7 +674,7 @@ if __name__ == '__main__':
 
                         start = time.time()
                         print '     Evaluating Graph Network...'
-                        gn = GN(test_seqs[i], test_lengths[i], 0.3)
+                        gn = GN(test_seqs[i], begin, test_lengths[i], 0.3)
                     else:
                         seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
                         sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
@@ -837,7 +682,7 @@ if __name__ == '__main__':
 
                         start = time.time()
                         print '     Evaluating Graph Network...'
-                        gn = GN(seqs[i], lengths[i], 0.3)
+                        gn = GN(seqs[i], begin, end, 0.3)
                         print '     Recover the number missing detections:', gn.missingCounter
                         print '     The number of sideConnections:', gn.sideConnection
                     print 'Time consuming:', (time.time()-start)/60.0

@@ -26,7 +26,7 @@ else:
     fine_tune_dir = ''
     app_dir = 'Pretrained'
 
-decay = 1.9
+decay = 1.3
 decay_dir = '_decay'
 
 f_gap = 0
@@ -45,7 +45,7 @@ tau_frame = 25          # The difference of the anchor and positive should be ne
 
 gap = 25                # max frame number for side connection
 
-show_recovering = 0     # 1 - 11, 0 - 10
+show_recovering = 1     # 1 - 11, 0 - 10
 overlap = 0.85          # the IoU
 
 # edge_init|                       random                       |

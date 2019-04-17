@@ -149,10 +149,13 @@ class ADatasetFromFolder(data.Dataset):
         return [ratio, ratio1, ratio2, Area]
 
     def getMN(self, m, n):
+        cur = self.f_step - self.gap
         ans = [[None for i in xrange(n)] for i in xrange(m)]
         for i in xrange(m):
+            Reframe = self.bbx[cur][i]
             for j in xrange(n):
-                p = random.random()
+                GTframe = self.bbx[self.f_step][j]
+                p = self.IOU(Reframe, GTframe)[0]
                 # 1 - match, 0 - mismatch
                 ans[i][j] = torch.FloatTensor([(1 - p)/100.0, p/100.0]).to(self.device)
         return ans

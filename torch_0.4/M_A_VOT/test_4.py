@@ -27,14 +27,23 @@ type = ''
 t_dir = ''  # the dir of the final level
 sequence_dir = ''  # the dir of the training dataset
 
-# seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
-# lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
-#
-test_seqs = [1, 3, 6, 7, 8, 12, 14]
-test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
+# 7 - training with all the sequences for final model
+# 4 - training with four sequences for selecting best parameters
+# 0 - training with all the sequences but only first 80% of sequence for training, and the rest for validation
+train_set_num = 0
 
-seqs = [9, 11, 13]
-lengths = [525, 900, 750]
+if train_set_num == 0:
+    seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
+    lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
+
+    test_seqs = [1, 3, 6, 7, 8, 12, 14]
+    test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
+else:
+    seqs = [9, 11, 13]
+    lengths = [525, 900, 750]
+
+    test_seqs = [9, 11, 13]
+    test_lengths = [525, 900, 750]
 
 # seqs = [11]
 # lengths = [900]
@@ -48,7 +57,7 @@ vot_conf_score = 0.99
 # decay = 0.0
 
 class GN():
-    def __init__(self, seq_index, tt, a, cuda=True):
+    def __init__(self, seq_index, begin, end, a, cuda=True):
         '''
         Evaluating with the MotMetrics
         :param seq_index: the number of the sequence
@@ -60,7 +69,8 @@ class GN():
         self.seq_index = seq_index
         self.hungarian = Munkres()
         self.device = torch.device("cuda" if cuda else "cpu")
-        self.tt = tt
+        self.begin = begin
+        self.end = end
         self.alpha = a
         self.missingCounter = 0
         self.sideConnection = 0
@@ -70,21 +80,28 @@ class GN():
         self.loadMModel()
         self.loadVOT()
 
-        # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_tau_tdir1.0/'%(type,
-        #                                                                        self.alpha,
-        #                                                                        decay_dir, decay,
-        #                                                                        recover_dir, u_dir)
+        if train_set_num == 4:
+            # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_tau_tdir1.0/'%(type,
+            #                                                                        self.alpha,
+            #                                                                        decay_dir, decay,
+            #                                                                        recover_dir, u_dir)
 
-        # 1.9 - decay_tag > 0, 1.1~1.8 - decay_tag > 1
-        self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f/'%(type,
-                                                                               self.alpha,
-                                                                               decay_dir, decay,
-                                                                               recover_dir, u_dir, vot_conf_score)
+            # 1.9 - decay_tag > 0, 1.1~1.8 - decay_tag > 1
 
-        # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f_exp/'%(type,
-        #                                                                        self.alpha,
-        #                                                                        decay_dir, decay,
-        #                                                                        recover_dir, u_dir, vot_conf_score)
+            self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f/'%(type,
+                                                                                   self.alpha,
+                                                                                   decay_dir, decay,
+                                                                                   recover_dir, u_dir, vot_conf_score)
+
+            # self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f_exp/'%(type,
+            #                                                                        self.alpha,
+            #                                                                        decay_dir, decay,
+            #                                                                        recover_dir, u_dir, vot_conf_score)
+        else:
+            self.out_dir = t_dir + 'motmetrics_%s_4_%.1f%s_%.2f%s%s_vc_%.2f_dseq/'%(type,
+                                                                                   self.alpha,
+                                                                                   decay_dir, decay,
+                                                                                   recover_dir, u_dir, vot_conf_score)
 
         print '		', self.out_dir
         if not os.path.exists(self.out_dir):
@@ -100,16 +117,16 @@ class GN():
         self.m_train_set = MDatasetFromFolder(sequence_dir, '../MOT/MOT16/train/MOT16-%02d'%self.seq_index, tau_conf_score)
 
         gt_training = self.out_dir + 'gt_training.txt'  # the gt of the training data
-        self.copyLines(self.seq_index, 1, gt_training, self.tt)
+        self.copyLines(self.seq_index, self.begin, gt_training, self.end)
 
         detection_dir = self.out_dir +'res_training_det.txt'
         res_training = self.out_dir + 'res_training.txt'  # the result of the training data
         self.createTxt(detection_dir)
         self.createTxt(res_training)
-        self.copyLines(self.seq_index, 1, detection_dir, self.tt, 1)
+        self.copyLines(self.seq_index, self.begin, detection_dir, self.end, 1)
 
         self.out = open(res_training, 'w')
-        self.evaluation(1, self.tt, detection_dir)
+        self.evaluation(self.begin, self.end, detection_dir)
         self.out.close()
 
     def getSeqL(self, info):
@@ -136,7 +153,7 @@ class GN():
             basic_dir = '../MOT/MOT%d/test/MOT%d-%02d-%s/' % (year, year, seq, type)
         else:
             basic_dir = '../MOT/MOT%d/train/MOT%d-%02d-%s/' % (year, year, seq, type)
-        print '     Testing on', basic_dir, 'Length:', self.tt
+        print '     Testing on', basic_dir, 'Length:', self.end - self.begin+1
         seqL = tail if tail != -1 else self.getSeqL(basic_dir + 'seqinfo.ini')
 
         det_dir = 'gt/gt_det.txt' if test_gt_det else 'det/det.txt'
@@ -166,15 +183,14 @@ class GN():
 
     def loadAModel(self):
         from mot_model import uphi, ephi, vphi
+        name = '%s_%d'%(app_dir, train_set_num)
         if edge_initial == 0:
             model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'App2_bb'
-            name = '%s_4'%app_dir
             i_name = 'Random'
-        tail = 10
+        tail = 10 if train_set_num == 4 else 13
         self.AUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%02d.pth'%(model_dir, i_name, name, tail)).to(self.device)
         self.AVphi = torch.load('../%s/Results/MOT16/%s/%s/vphi_%02d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.AEphi1 = torch.load('../%s/Results/MOT16/%s/%s/ephi1_%02d.pth'%(model_dir,i_name, name, tail)).to(self.device)
@@ -184,15 +200,14 @@ class GN():
 
     def loadMModel(self):
         from m_mot_model import uphi, ephi
+        name = 'all_%d'%train_set_num
         if edge_initial == 0:
             model_dir = 'Motion1_bb'
-            name = 'all_4'
             i_name = 'IoU'
         elif edge_initial == 1:
             model_dir = 'Motion1_bb'
-            name = 'all_4'
             i_name = 'Random'
-        tail = 10
+        tail = 10 if train_set_num == 4 else 13
         self.MUphi = torch.load('../%s/Results/MOT16/%s/%s/uphi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.MEphi = torch.load('../%s/Results/MOT16/%s/%s/ephi_%d.pth'%(model_dir,i_name, name, tail)).to(self.device)
         self.Mu = torch.load('../%s/Results/MOT16/%s/%s/u_%d.pth'%(model_dir,i_name, name, tail))
@@ -792,9 +807,9 @@ class GN():
 start_a = time.time()
 if __name__ == '__main__':
     try:
-        # for a in xrange(9):
-            # decay = 1.1 + a/10.0
-        for i in xrange(1):
+        for a in xrange(91, 100):
+            vot_conf_score = a/100.0
+        # for i in xrange(1):
             if not os.path.exists('Results/'):
                 os.mkdir('Results/')
 
@@ -820,15 +835,19 @@ if __name__ == '__main__':
 
                 for i in xrange(len(seqs)):
                     seq_index = seqs[i]
-                    tt = lengths[i]
-                    print 'The sequence:', seq_index, '- The length of the training data:', tt
+                    begin = 1
+                    end = lengths[i]
+                    if train_set_num == 0:
+                        begin = int(end*0.8)
+
+                    print 'The sequence:', seq_index, '- The length of the training data:', end - begin+1
 
                     s_dir = f_dir + '%02d/' % seq_index
                     if not os.path.exists(s_dir):
                         os.mkdir(s_dir)
                         print s_dir, 'does not exist!'
 
-                    t_dir = s_dir + '%d/' % tt
+                    t_dir = s_dir + '%d/' % end
                     if not os.path.exists(t_dir):
                         os.mkdir(t_dir)
                         print t_dir, 'does not exist!'
@@ -840,7 +859,7 @@ if __name__ == '__main__':
 
                         start = time.time()
                         print '     Evaluating Graph Network...'
-                        gn = GN(test_seqs[i], test_lengths[i], 0.7)
+                        gn = GN(test_seqs[i], begin, test_lengths[i], 0.3)
                     else:
                         seq_dir = 'MOT%d-%02d-%s' % (year, seqs[i], type)
                         sequence_dir = '../MOT/MOT%d/train/'%year + seq_dir
@@ -848,7 +867,7 @@ if __name__ == '__main__':
 
                         start = time.time()
                         print '     Evaluating Graph Network...'
-                        gn = GN(seqs[i], lengths[i], 0.7)
+                        gn = GN(seqs[i], begin, end, 0.3)
                         print '     Recover the number missing detections:', gn.missingCounter
                         print '     The number of sideConnections:', gn.sideConnection
                     print 'Time consuming:', (time.time()-start)/60.0

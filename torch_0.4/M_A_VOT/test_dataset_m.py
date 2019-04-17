@@ -140,6 +140,9 @@ class MDatasetFromFolder(data.Dataset):
         d = sqrt(dx*dx+dy*dy)
         if d <= w:
             return 0.0
+            # return d/w  # Linear
+            # d = (w-d)/w
+            # return exp(-d*d*4.0)  # exp(-x^2)
         return tau_threshold
 
     def getRet(self):
@@ -225,10 +228,13 @@ class MDatasetFromFolder(data.Dataset):
             self.detections[self.nxt][j][0] = [cur_m]
 
     def getMN(self, m, n):
+        cur = self.f_step - self.gap
         ans = [[None for i in xrange(n)] for i in xrange(m)]
         for i in xrange(m):
+            Reframe = self.bbx[cur][i]
             for j in xrange(n):
-                p = random.random()
+                GTframe = self.bbx[self.f_step][j]
+                p = self.IOU(Reframe, GTframe)
                 # 1 - match, 0 - mismatch
                 ans[i][j] = torch.FloatTensor([(1 - p)/100.0, p/100.0])
         return ans

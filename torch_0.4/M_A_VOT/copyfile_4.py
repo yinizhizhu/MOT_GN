@@ -1,4 +1,10 @@
 import shutil, os
+from global_set import edge_initial
+
+if edge_initial == 0:
+    init_dir = 'IoU'
+elif edge_initial == 1:
+    init_dir = 'Random'
 
 
 year = 17
@@ -19,8 +25,8 @@ for type in types[0:]:
     for i in xrange(len(seqs)):
         # src_dir = 'Results/MOT%d/Random/%02d/%d/%s_%s_4_0.7_decay_1.90_%sRecover_uupdate_vc_0.99/res_training.txt'\
         #           %(year, seqs[i], lengths[i], name, type, recover)
-        src_dir = 'Results/MOT%d/Random/%02d/%d/%s_%s_4_0.7_decay_1.90_%sRecover_uupdate_vc_0.99/res_training.txt'\
-                  %(year, seqs[i], lengths[i], name, type, recover)
+        src_dir = 'Results/MOT%d/%s/%02d/%d/%s_%s_4_0.7_decay_1.90_%sRecover_uupdate_vc_0.99/res_training.txt'\
+                  %(year, init_dir, seqs[i], lengths[i], name, type, recover)
 
         des_d = '../Validation/%s/'%(name2)
         if not os.path.exists(des_d):

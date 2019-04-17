@@ -11,7 +11,7 @@ name = 'motmetrics'
 seqs = [2, 4, 5, 9, 10, 11, 13]  # the set of sequences
 lengths = [600, 1050, 837, 525, 654, 900, 750]  # the length of the sequence
 
-name2 = 'MOT_M_ANew_dis'
+name2 = 'MOT_M_ANew_VOT'
 test_seqs = [1, 3, 6, 7, 8, 12, 14]
 test_lengths = [450, 1500, 1194, 500, 625, 900, 750]
 
@@ -28,7 +28,7 @@ for type in types:
                                                                          test_lengths[i],
                                                                          name,
                                                                          type,
-                                                                         '_0.7_decay_1.90_Recover_uupdate_vc_0.99_exp')
+                                                                         '_0.7_decay_1.90_Recover_uupdate_vc_0.99')
 
         des_d = '../Test%d/%s/'%(year, name2)
         if not os.path.exists(des_d):
@@ -52,7 +52,7 @@ for type in types:
                                                                          test_lengths[i],
                                                                          name,
                                                                          type,
-                                                                         '_0.7_decay_1.90_NoRecover_uupdate_vc_0.99_exp')
+                                                                         '_0.7_decay_1.90_NoRecover_uupdate_vc_0.99')
 
         des_d = '../Test%d/%s/'%(year, name2)
         if not os.path.exists(des_d):
